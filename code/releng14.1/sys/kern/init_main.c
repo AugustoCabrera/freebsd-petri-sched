@@ -344,7 +344,10 @@ mi_startup(void)
 	/*
 	 * Now hand over this thread to swapper.
 	 */
-	printf(" SIN DEBUG !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!???????????????.\n");
+	for (int i = 0; i < 6; i++) {
+		printf("> feature/fsm-thread-net .\n");
+	}
+
 
 	swapper();
 	/* NOTREACHED*/
