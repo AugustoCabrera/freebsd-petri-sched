@@ -5,7 +5,7 @@
 SYSCTL_STRING(_kern_sched, OID_AUTO, cpu_sel, CTLFLAG_RD, "PETRI", 0,
     "Scheduler pickcpu method");
 
-/* GLOBAL VARIABLES */
+/* GLOBAL VARIABLES */ 
 const int incidence_matrix[THREADS_PLACES_SIZE][THREADS_TRANSITIONS_SIZE] = {
 	{-1,  0,  0,  0,  0,  0,  0},
 	{ 1, -1,  0,  1,  0,  1,  1},
