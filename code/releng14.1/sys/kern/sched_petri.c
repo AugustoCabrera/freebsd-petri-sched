@@ -16,6 +16,7 @@
 SYSCTL_STRING(_kern_sched, OID_AUTO, cpu_sel, CTLFLAG_RD, "PETRI", 0,
     "Scheduler pickcpu method");
 
+
 /* ============================================================
  * Incidence matrix of the thread net (places × transitions)
  *
@@ -38,6 +39,7 @@ SYSCTL_STRING(_kern_sched, OID_AUTO, cpu_sel, CTLFLAG_RD, "PETRI", 0,
  */
 
 /* Global data (read-only) */
+
 const int incidence_matrix[THREADS_PLACES_SIZE][THREADS_TRANSITIONS_SIZE] = {
 	/*             INIT  ON_Q  SET_RUN  SWITCH_OUT  TO_WAIT   WAKEUP  REMOVE */
 	/* INACTIVE */ { -1,   0,     0,        0,         0,       0,      0   },
