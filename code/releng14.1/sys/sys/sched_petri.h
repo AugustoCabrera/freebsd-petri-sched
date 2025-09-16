@@ -10,11 +10,11 @@
        CPU_ISSET((cpu), &(td)->td_cpuset->cs_mask)
 
 /* macros for common operations to obtain indexes of net places and transitions */
-#define CPU_BASE_TRANSITION(cpu)	cpu*CPU_BASE_TRANSITIONS
-#define CPU_BASE_PLACE(cpu)			cpu*CPU_BASE_PLACES
+#define CPU_BASE_TRANSITION(cpu)  ((cpu) * CPU_BASE_TRANSITIONS)
+#define CPU_BASE_PLACE(cpu)       ((cpu) * CPU_BASE_PLACES)
 
-#define TRANSITION(cpu, transition)	(CPU_BASE_TRANSITION(cpu) + transition)
-#define PLACE(cpu, place)			(CPU_BASE_PLACE(cpu) + place)
+#define TRANSITION(cpu, transition)  (CPU_BASE_TRANSITION(cpu) + (transition))
+#define PLACE(cpu, place)            (CPU_BASE_PLACE(cpu) + (place))
 
 /* Definition of constants of the resource petri net */
 #define CPU_BASE_PLACES 		5
@@ -72,11 +72,38 @@ struct petri_cpu_resource_net {
 	char **inhibition_matrix;
 };
 
+
+//make the contract explicit for the thread FSM implementation */
+#ifndef THREADS_PLACES_SIZE
+#define THREADS_PLACES_SIZE 5
+#endif
+
+
 //Petri thread Methods
 void init_petri_thread(struct thread *pt_thread);
 void init_petri_thread0(struct thread *pt_thread);
-void thread_petri_fire(struct thread *pt, int transition, int print);
+//void thread_petri_fire(struct thread *pt, int transition, int print);
 void wakeup_if_needed(struct thread *td);
+
+
+/* =========================
+ * Thread FSM (one-hot) API
+ * =========================
+ * The thread net is modeled as a one-hot FSM.
+ * Each helper below writes the final marking in O(1) (no incidence loops).
+ * Call them explicitly right after resource_fire_net(...) from sched_4bsd.
+ */
+
+
+/* New FSM-style setters (final one-hot markings). */
+void thread_fire_runq(struct thread *pt);       /* -> {0,0,1,0,0}  (ADDTOQUEUE, EXEC_IDLE) */
+void thread_fire_running(struct thread *pt);    /* -> {0,0,0,1,0}  (EXEC) */
+void thread_fire_suspended(struct thread *pt);  /* -> {0,0,0,0,1}  (RETURN_INVOL) */
+void thread_fire_can_run(struct thread *pt);    /* -> {0,1,0,0,0}  (RETURN_VOL, REMOVE_QUEUE) */
+
+/* Deprecated legacy API (kept only if some call sites still include it). */
+/* void thread_petri_fire(struct thread *pt, int transition, int print); */ /* DEPRECATED */
+
 
 //Petri Global Methods
 int  resource_choose_cpu(struct thread *td);
@@ -90,8 +117,8 @@ void *init_pointer(size_t size);
 void init_resource_net(void);
 bool monopolize_cpu(int proc_id, int cpu); 
 bool release_cpu(int proc_id, int cpu); 
-void resource_fire_net(struct thread *pt, int transition_index, char *func);
-void resource_expulse_thread(struct thread *td, int flags, char *func);
+void resource_fire_net(struct thread *pt, int transition_index, const char *func);
+void resource_expulse_thread(struct thread *td, int flags, const char *func);
 void toggle_pin_thread_to_cpu(int thread_id, int cpu);
 void turn_off_cpu(int cpu);
 void turn_on_cpu(int cpu);
