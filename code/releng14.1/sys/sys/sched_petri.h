@@ -83,7 +83,7 @@ enum thread_place_fsm {
 };
 
 /* Tabla one-hot: fila = estado destino (5 enteros por fila) */
-extern const int thread_fire[THREADS_PLACES_SIZE][THREADS_PLACES_SIZE];
+extern const int *thread_fire[THREADS_PLACES_SIZE];
 
 
 

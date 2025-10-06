@@ -326,11 +326,11 @@ void resource_expulse_thread(struct thread *td, int flags, const char *func)
     /* Directly set the thread FSM (one-hot) in O(1) */
     if (is_voluntary) {
         /* Voluntary return: RUNNING -> CAN_RUN */
-        thread_fire_can_run(td);   /* {0,1,0,0,0} */
+        td->mark = thread_fire[PLACE_CAN_RUN];   /* {0,1,0,0,0} */
         td->td_frominh = 0;        /* no pending wakeup */
     } else {
         /* Involuntary return/preempt: RUNNING -> INHIBITED/WAIT */
-        thread_fire_suspended(td); /* {0,0,0,0,1} */
+        td->mark = thread_fire[PLACE_INHIBITED]; /* {0,0,0,0,1} */
         td->td_frominh = 1;        /* allow wakeup_if_needed() to restore CAN_RUN */
     }
 }
