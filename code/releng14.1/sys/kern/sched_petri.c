@@ -16,6 +16,18 @@
 SYSCTL_STRING(_kern_sched, OID_AUTO, cpu_sel, CTLFLAG_RD, "PETRI", 0,
     "Scheduler pickcpu method");
 
+/* One-hot (orden: INACTIVE, CAN_RUN, RUNQ, RUNNING, INHIBITED) */
+static const int MARK_INACTIVE [5] = {1,0,0,0,0};
+static const int MARK_CAN_RUN  [5] = {0,1,0,0,0};
+static const int MARK_RUNQ     [5] = {0,0,1,0,0};
+static const int MARK_RUNNING  [5] = {0,0,0,1,0};
+static const int MARK_INHIBITED[5] = {0,0,0,0,1};
+
+const int *thread_fire[THREADS_PLACES_SIZE] = {
+    MARK_INACTIVE, MARK_CAN_RUN, MARK_RUNQ, MARK_RUNNING, MARK_INHIBITED
+};
+
+
 
 /* ============================================================
  * Incidence matrix of the thread net (places × transitions)
@@ -62,7 +74,6 @@ const char *thread_places[THREADS_PLACES_SIZE] = {
 };
 
 /* Internal prototypes */
-static inline bool thread_transition_is_sensitized(struct thread *pt, int transition_index);
 static void thread_print_net(struct thread *pt);
 
 /* ============================================================
@@ -70,125 +81,15 @@ static void thread_print_net(struct thread *pt);
  * ============================================================
  */
 
-void
-init_petri_thread(struct thread *pt_thread)
-{
-	/* Regular threads start in CAN_RUN */
-	for (int i = 0; i < THREADS_PLACES_SIZE; i++)
-		pt_thread->mark[i] = initial_mark[i];
-	pt_thread->td_frominh = 0;
+/* Inits usando asignación directa de puntero (sin casts) */
+void init_petri_thread(struct thread *pt) {
+    pt->mark = thread_fire[THREAD_CAN_RUN];
+    pt->td_frominh = 0;
 }
 
-void
-init_petri_thread0(struct thread *pt_thread)
-{
-	/* Thread 0 starts in RUNNING */
-	for (int i = 0; i < THREADS_PLACES_SIZE; i++)
-		pt_thread->mark[i] = initial_mark0[i];
-	pt_thread->td_frominh = 0;
-}
-
-/* ============================================================
- * Sensitization helper (diagnostics only).
- * At runtime, the resource net guarantees sensitization,
- * so thread_petri_fire() does not need to re-check it.
- * ============================================================
- */
-
-static inline bool
-thread_transition_is_sensitized(struct thread *pt, int transition_index)
-{
-	for (int places_index = 0; places_index < THREADS_PLACES_SIZE; places_index++) {
-		if ((incidence_matrix[places_index][transition_index] < 0) &&
-		    ((incidence_matrix[places_index][transition_index] + pt->mark[places_index]) < 0))
-			return false;
-	}
-	return true;
-}
-
-/* ============================================================
- * Fire a thread-level transition (hierarchical to resources).
- * ============================================================
- */
-
-// void
-// thread_petri_fire(struct thread *pt, int transition, int print)
-// {
-// #ifdef DIAGNOSTIC
-// 	/* In debug builds, detect desynchronizations with the resource net. */
-// 	KASSERT(thread_transition_is_sensitized(pt, transition),
-// 	    ("thread transition %d not sensitized (desync with resource net)", transition));
-// #endif
-
-// 	for (int i = 0; i < THREADS_PLACES_SIZE; i++)
-// 		pt->mark[i] += incidence_matrix[i][transition];
-
-// 	if (print > 0) {
-// 		const char *tname =
-// 		    (transition >= 0 && transition < THREADS_TRANSITIONS_SIZE)
-// 		        ? thread_transitions_names[transition]
-// 		        : "UNKNOWN";
-// 		log(LOG_INFO, "\t(sched_petri) %s fired for thread %d\n", tname, pt->td_tid);
-// 	}
-// }
-
-
-
-/* ============================================================
- * Thread FSM (one-hot): final markings in O(1)
- * These helpers directly set the one-hot marking for the
- * thread net places, without using the incidence matrix.
- *
- * Place order (THREADS_PLACES_SIZE == 5):
- *   0: INACTIVE, 1: CAN_RUN, 2: RUNQ, 3: RUNNING, 4: INHIBITED
- * ============================================================
- */
-
-/* Compile-time contract: keep header and implementation aligned. */
-_Static_assert(THREADS_PLACES_SIZE == 5, "Expected 5 thread places in thread net");
-
-/* Internal helper: write a one-hot marking (exactly one '1'). */
-static inline void
-thread_set_mark5(struct thread *pt, int m0, int m1, int m2, int m3, int m4)
-{
-#ifdef DIAGNOSTIC
-	int sum = (m0 != 0) + (m1 != 0) + (m2 != 0) + (m3 != 0) + (m4 != 0);
-	KASSERT(sum == 1, ("thread_set_mark5: mark is not one-hot (%d,%d,%d,%d,%d)",
-	    m0, m1, m2, m3, m4));
-#endif
-	pt->mark[0] = m0;
-	pt->mark[1] = m1;
-	pt->mark[2] = m2;
-	pt->mark[3] = m3;
-	pt->mark[4] = m4;
-}
-
-/* -> {0,0,1,0,0}  (ADDTOQUEUE, EXEC_IDLE) */
-void
-thread_fire_runq(struct thread *pt)
-{
-	thread_set_mark5(pt, 0, 0, 1, 0, 0);
-}
-
-/* -> {0,0,0,1,0}  (EXEC) */
-void
-thread_fire_running(struct thread *pt)
-{
-	thread_set_mark5(pt, 0, 0, 0, 1, 0);
-}
-
-/* -> {0,0,0,0,1}  (RETURN_INVOL) */
-void
-thread_fire_suspended(struct thread *pt)
-{
-	thread_set_mark5(pt, 0, 0, 0, 0, 1);
-}
-
-/* -> {0,1,0,0,0}  (RETURN_VOL, REMOVE_QUEUE, WAKEUP target) */
-void
-thread_fire_can_run(struct thread *pt)
-{
-	thread_set_mark5(pt, 0, 1, 0, 0, 0);
+void init_petri_thread0(struct thread *pt) {
+    pt->mark = thread_fire[THREAD_RUNNING];
+    pt->td_frominh = 0;
 }
 
 
@@ -199,16 +100,12 @@ thread_fire_can_run(struct thread *pt)
  * ============================================================
  */
 
-void
-wakeup_if_needed(struct thread *td)
-{
-	if (td && (td->td_frominh == 1)) {
-		/* WAKEUP moves the thread from INHIBITED to CAN_RUN */
-		thread_fire_can_run(td);
-		td->td_frominh = 0;
-	}
+void wakeup_if_needed(struct thread *td) {
+    if (td && td->td_frominh == 1) {
+        td->mark = thread_fire[THREAD_CAN_RUN];
+        td->td_frominh = 0;
+    }
 }
-
 
 /* ============================================================
  * Debug helper: print the current marking of a thread net.

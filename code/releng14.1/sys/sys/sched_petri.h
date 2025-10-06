@@ -73,6 +73,20 @@ struct petri_cpu_resource_net {
 };
 
 
+/* Índices de plazas del net de HILOS (no confundir con los de recursos) */
+enum thread_place_fsm {
+    THREAD_INACTIVE  	= 0,
+    THREAD_CAN_RUN   	= 1,
+    THREAD_RUNQ      	= 2,
+    THREAD_RUNNING   	= 3,
+    THREAD_INHIBITED 	= 4
+};
+
+/* Tabla one-hot: fila = estado destino (5 enteros por fila) */
+extern const int thread_fire[THREADS_PLACES_SIZE][THREADS_PLACES_SIZE];
+
+
+
 //make the contract explicit for the thread FSM implementation */
 #ifndef THREADS_PLACES_SIZE
 #define THREADS_PLACES_SIZE 5
@@ -93,16 +107,6 @@ void wakeup_if_needed(struct thread *td);
  * Each helper below writes the final marking in O(1) (no incidence loops).
  * Call them explicitly right after resource_fire_net(...) from sched_4bsd.
  */
-
-
-/* New FSM-style setters (final one-hot markings). */
-void thread_fire_runq(struct thread *pt);       /* -> {0,0,1,0,0}  (ADDTOQUEUE, EXEC_IDLE) */
-void thread_fire_running(struct thread *pt);    /* -> {0,0,0,1,0}  (EXEC) */
-void thread_fire_suspended(struct thread *pt);  /* -> {0,0,0,0,1}  (RETURN_INVOL) */
-void thread_fire_can_run(struct thread *pt);    /* -> {0,1,0,0,0}  (RETURN_VOL, REMOVE_QUEUE) */
-
-/* Deprecated legacy API (kept only if some call sites still include it). */
-/* void thread_petri_fire(struct thread *pt, int transition, int print); */ /* DEPRECATED */
 
 
 //Petri Global Methods
