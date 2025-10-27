@@ -1069,7 +1069,7 @@ sched_switch(struct thread *td, int flags)
 	newtd = choosethread();
 	MPASS(newtd->td_lock == &sched_lock);
 	resource_fire_net(newtd, TRANSITION(PCPU_GET(cpuid), TRAN_EXEC), "sched_switch");
-
+	newtd->mark = thread_fire[THREAD_RUNNING];
 
 #if (KTR_COMPILE & KTR_SCHED) != 0
 	if (TD_IS_IDLETHREAD(td))
@@ -1386,6 +1386,7 @@ sched_add(struct thread *td, int flags)
 		    cpu);
 
 		resource_fire_net(td, TRANSITION(cpu, TRAN_ADDTOQUEUE), "sched_add");
+		td->mark = thread_fire[THREAD_RUNQ];
 	} else {
 		CTR2(KTR_RUNQ,
 		    "sched_add: adding td_sched:%p (td:%p) to gbl runq", ts,
@@ -1393,6 +1394,7 @@ sched_add(struct thread *td, int flags)
 		cpu = NOCPU;
 		ts->ts_runq = &runq;
 		resource_fire_net(td, TRAN_QUEUE_GLOBAL, "sched_add");
+		// (no FSM call)
 	}
 
 	if ((td->td_flags & TDF_NOLOAD) == 0)
@@ -1491,8 +1493,10 @@ sched_rem(struct thread *td)
 	if (ts->ts_runq != &runq) {
 		runq_length[ts->ts_runq - runq_pcpu]--;
 		resource_fire_net(td, TRANSITION((ts->ts_runq - runq_pcpu), TRAN_REMOVE_QUEUE), "sched_rem");
+		td->mark = thread_fire[THREAD_CAN_RUN];
 	} else
 		resource_fire_net(td, TRAN_REMOVE_GLOBAL_QUEUE, "sched_add");
+		// (no FSM call)
 #endif
 	runq_remove(ts->ts_runq, td);
 	TD_SET_CAN_RUN(td);
@@ -1537,10 +1541,11 @@ sched_choose(void)
 		rq = &runq_pcpu[cpu_n];
 
 		if (td) //active thread available
-			resource_fire_net(td, TRANSITION(cpu_n, TRAN_UNQUEUE), "sched_choose");
+			resource_fire_net(td, TRANSITION(cpu_n, TRAN_UNQUEUE), "sched_choose"); // (no FSM call)
 		else if (is_cpu_suspended(cpu_n)) { //CPU suspended -> no active thread 
 			wakeup_if_needed(idletd);
 			resource_fire_net(idletd, TRANSITION(cpu_n, TRAN_EXEC_IDLE), "sched_choose_4");
+			idletd->mark = thread_fire[THREAD_RUNQ];
 			return (idletd);
 		}
 	} else {
@@ -1550,6 +1555,7 @@ sched_choose(void)
 			// El td es el de la cola global y se continua la ejecución
 			CTR1(KTR_RUNQ, "choosing td_sched %p from main runq", td);
 			resource_fire_net(td, TRANSITION(cpu_n, TRAN_FROM_GLOBAL_CPU), "sched_choose");
+			// (no FSM call)
 		} else //si la cpu no esta disponible para el hilo hago que se ejecute idlethread?
 			td = NULL;
 	}
@@ -1574,6 +1580,8 @@ sched_choose(void)
 
 	wakeup_if_needed(idletd);
 	resource_fire_net(idletd, TRANSITION(cpu_n, TRAN_EXEC_IDLE), "sched_choose_3");
+	idletd->mark = thread_fire[THREAD_RUNQ];
+
 	return (idletd);
 }
 
@@ -1748,6 +1756,7 @@ sched_throw_tail(struct thread *td)
 	KASSERT(curthread->td_md.md_spinlock_count == 1, ("invalid count"));
 	newtd = choosethread();
 	resource_fire_net(newtd, TRANSITION(PCPU_GET(cpuid), TRAN_EXEC), "sched_throw");
+	newtd->mark = thread_fire[THREAD_RUNNING];
 	cpu_throw(td, newtd);	/* doesn't return */
 }
 

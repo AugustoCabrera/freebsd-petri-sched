@@ -1,13 +1,3 @@
-/*
- ============================================================================
- Name        : petri_global_net.c
- Author      : 
- Version     :
- Copyright   : Your copyright notice
- Description : Hello World in C, Ansi-style
- ============================================================================
- */
-
 #include <sys/types.h>
 #include <sys/sched_petri.h>
 #include <sys/syslog.h>
@@ -206,18 +196,18 @@ is_inhibited(int places_index, int transition_index)
 	return ((resource_net->inhibition_matrix[places_index][transition_index] == 1) && (resource_net->mark[places_index] > 0));
 }
 
-static __inline int 
-is_hierarchical(int transition) 
-{
+// static __inline int 
+// is_hierarchical(int transition) 
+// {
 
-	for (int i = 0; i < HIERARCHICAL_TRANSITIONS; i++) {
-		if (transition == hierarchical_transitions[i] ||
-			((transition < TRAN_REMOVE_GLOBAL_QUEUE) && 
-			(transition % CPU_BASE_TRANSITIONS) == hierarchical_transitions[i]))
-			return hierarchical_corresponse[i];
-	}
-	return 0;
-}
+// 	for (int i = 0; i < HIERARCHICAL_TRANSITIONS; i++) {
+// 		if (transition == hierarchical_transitions[i] ||
+// 			((transition < TRAN_REMOVE_GLOBAL_QUEUE) && 
+// 			(transition % CPU_BASE_TRANSITIONS) == hierarchical_transitions[i]))
+// 			return hierarchical_corresponse[i];
+// 	}
+// 	return 0;
+// }
 
 bool 
 is_cpu_suspended(int cpu_n)
@@ -229,7 +219,7 @@ is_cpu_suspended(int cpu_n)
  * fire the transition passed as param to the function
  * and check for automatic transitions to be fired
 */
-void resource_fire_net(struct thread *pt, int transition_index, char *func)
+void resource_fire_net(struct thread *pt, int transition_index, const char *func)
 {
 
 	if (pt) {
@@ -260,15 +250,15 @@ void resource_fire_net(struct thread *pt, int transition_index, char *func)
 static void 
 resource_fire_single_transition(struct thread *pt, int transition_index) 
 {
-	int local_transition = 0;
+	//int local_transition = 0;
 	
 	//Fire cpu net	
 	for (int num_place = 0; num_place < CPU_NUMBER_PLACES; num_place++)
 		resource_net->mark[num_place] += resource_net->incidence_matrix[num_place][transition_index];
 	
-	local_transition = is_hierarchical(transition_index);
-	if (local_transition) //If we need to fire a local thread transition we fire it here
-		thread_petri_fire(pt, local_transition, print); 
+	// local_transition = is_hierarchical(transition_index);
+	// if (local_transition) //If we need to fire a local thread transition we fire it here
+	// 	thread_petri_fire(pt, local_transition, print); 
 }
 
 bool 
@@ -323,18 +313,28 @@ resource_choose_cpu(struct thread* td)
 	return TRAN_QUEUE_GLOBAL;
 }
 
-void 
-resource_expulse_thread(struct thread *td, int flags, char *func) 
+void resource_expulse_thread(struct thread *td, int flags, const char *func)
 {
-	int transition_number;
+    /* Decide the resource-net transition based on the switch type */
+    const int cpu = td->td_lastcpu;
+    const bool is_voluntary = (flags & SW_VOL) != 0;
+    const int res_tr = TRANSITION(cpu, is_voluntary ? TRAN_RETURN_VOL : TRAN_RETURN_INVOL);
 
-	transition_number = (flags & SW_VOL) ? 
-						TRANSITION(td->td_lastcpu, TRAN_RETURN_VOL) : 
-						TRANSITION(td->td_lastcpu, TRAN_RETURN_INVOL);
-	td->td_frominh = (flags & SW_VOL) ? 1 : 0;
-		
-	resource_fire_net(td, transition_number, func);
+    /* Fire resource net (CPU/resource-side) */
+    resource_fire_net(td, res_tr, func);
+
+    /* Directly set the thread FSM (one-hot) in O(1) */
+    if (is_voluntary) {
+        /* Voluntary return: RUNNING -> CAN_RUN */
+        td->mark = thread_fire[PLACE_CAN_RUN];   /* {0,1,0,0,0} */
+        td->td_frominh = 0;        /* no pending wakeup */
+    } else {
+        /* Involuntary return/preempt: RUNNING -> INHIBITED/WAIT */
+        td->mark = thread_fire[PLACE_INHIBITED]; /* {0,0,0,0,1} */
+        td->td_frominh = 1;        /* allow wakeup_if_needed() to restore CAN_RUN */
+    }
 }
+
 
 bool 
 toggle_active_cpu(int cpu, bool turn_off)
@@ -350,19 +350,18 @@ toggle_active_cpu(int cpu, bool turn_off)
 		return false;
 	}
 
-	int transition = turn_off ? TRAN_SUSPEND_PROC : TRAN_WAKEUP_PROC;
-	char *action = turn_off ? "turned off" : "turned on";
+	const int base_tr = turn_off ? TRAN_SUSPEND_PROC : TRAN_WAKEUP_PROC;
+    const int tr = TRANSITION(cpu, base_tr);
+    const char *action = turn_off ? "turned off" : "turned on";
 
-	if (transition_is_sensitized(TRANSITION(cpu, transition))) {
-		//if turning on, we need to check if its already on? i.e. if i can suspend it
-		//because i have doubts that if im not suspended, i can trigger TRAN_WAKEUP_PROC multiple times
-		resource_fire_net(curthread, TRANSITION(cpu, transition), action);
-		return true;
-	} 
-		
-	log(LOG_WARNING, "CPU %d cannot be %s\n", cpu, action);
+    if (transition_is_sensitized(tr)) {
+        /* Resource-only: this does not alter the thread FSM */
+        resource_fire_net(curthread, tr, action);
+        return true;
+    }
 
-	return false;
+    log(LOG_WARNING, "CPU %d cannot be %s\n", cpu, action);
+    return false;
 }
 
 void 
