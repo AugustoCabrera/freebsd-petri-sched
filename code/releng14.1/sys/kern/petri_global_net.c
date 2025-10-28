@@ -3,6 +3,15 @@
 #include <sys/syslog.h>
 #include <sys/malloc.h>
 
+
+/* necesarios para loguear con timestamp/CPU/TID */
+#include <sys/systm.h>    /* log(), printf */
+#include <sys/pcpu.h>     /* PCPU_GET(cpuid) */
+#include <sys/time.h>     /* nanouptime()   */
+#include <sys/proc.h>   /* struct thread -> td_tid, td_proc->p_comm */
+
+
+
 int CPU_NUMBER;
 int CPU_NUMBER_PLACES;
 int CPU_NUMBER_TRANSITIONS;
@@ -79,6 +88,40 @@ void init_global_resources(void);
 void init_global_variables(void);
 void init_per_cpu_resources(void);
 void print_resource_net(void);
+
+
+/* ---- Helper de logging con prefijo exacto "resource_net:" ---- */
+static inline void
+rn_log_transition(struct thread *pt, int tindex, const char *func, const char *note)
+{
+    if (!pt) return;
+
+    char tbuf[48];
+    const char *tname = rn_name_from_index(tindex, tbuf, sizeof(tbuf));
+
+    /* Core destino de la transición (si es per-CPU) */
+    int trcpu = -1;
+    if (tindex >= 0 && tindex < PER_CPU_LAST_TRANSITION)
+        trcpu = tindex / CPU_BASE_TRANSITIONS;
+
+    struct timespec ts; nanouptime(&ts);
+
+    log(LOG_INFO,
+        "resource_net: t=%ld.%09ld CPU=%02d TRCPU=%02d tid=%d proc=%s from=%s -> %s%s%s%s\n",
+        (long)ts.tv_sec, ts.tv_nsec,
+        PCPU_GET(cpuid),               /* CPU que ejecuta */
+        trcpu,                         /* CPU destino de la transición (o -1 si global) */
+        pt->td_tid,
+        pt->td_proc ? pt->td_proc->p_comm : "unknown",
+        func ? func : "unknown",
+        tname,
+        (note && *note) ? " (" : "",
+        (note && *note) ? note : "",
+        (note && *note) ? ")" : "");
+}
+
+
+
 
 /* this is needed because mp_ncpus is set at runtime */
 void 
@@ -226,6 +269,8 @@ void resource_fire_net(struct thread *pt, int transition_index, const char *func
 		if (!smp_set && smp_started) {
 			smp_set = 1;
 			resource_fire_single_transition(pt, TRAN_START_SMP);
+            /* Log del arranque SMP automático */
+            rn_log_transition(pt, TRAN_START_SMP, func, "auto");
 		}
 
 		if (transition_is_sensitized(transition_index)) {
@@ -234,9 +279,22 @@ void resource_fire_net(struct thread *pt, int transition_index, const char *func
 				print--;
 			}
 			resource_fire_single_transition(pt, transition_index);
+			/* Log del disparo exitoso de la transición */
+             rn_log_transition(pt, transition_index, func, NULL);
 
 		} else {
 			log(LOG_WARNING, "(resource_net) from %s Thread %2d (%s), CPU%2d: %s (%d) no sensibilizada\n", func, pt->td_tid, pt->td_proc->p_comm, PCPU_GET(cpuid), transitions_names[transition_index], transition_index);
+			/* Advertencia con prefijo exacto para que se vea en el log dedicado */
+            struct timespec ts; nanouptime(&ts);
+            log(LOG_WARNING,
+                "resource_net: t=%ld.%09ld CPU=%02d tid=%d proc=%s from=%s -> %s (not_sensitized idx=%d)\n",
+                (long)ts.tv_sec, ts.tv_nsec,
+                PCPU_GET(cpuid),
+                pt->td_tid,
+                pt->td_proc ? pt->td_proc->p_comm : "unknown",
+                func ? func : "unknown",
+                transitions_names[transition_index],
+                transition_index);
 			print_resource_net();
 		} 
 	}

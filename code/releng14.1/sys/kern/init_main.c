@@ -345,7 +345,7 @@ mi_startup(void)
 	 * Now hand over this thread to swapper.
 	 */
 	for (int i = 0; i < 6; i++) {
-		printf("> feature/fsm-thread-net 3 .\n");
+		printf("> feature/benchmark-resource-net \n");
 	}
 
 
