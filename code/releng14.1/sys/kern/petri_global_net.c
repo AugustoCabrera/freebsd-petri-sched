@@ -151,8 +151,6 @@ init_cpu_matrix(int cpu_n)
 		}
 	}
 
-	// VER COMO CRECE ESTA M_INC X CORE !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
 	//incidence between each cpu and global resources
 	resource_net->incidence_matrix[PLACE_GLOBAL_QUEUE][TRANSITION(cpu_n, TRAN_FROM_GLOBAL_CPU)] = -1;
 
@@ -193,6 +191,8 @@ init_resource_net(void)
 	allocate_resource_net();
 	init_per_cpu_resources();
 	init_global_resources();
+
+	rn_dump_resource_matrices_full();
 
 	log(LOG_KERN, "Petri scheduler resource net initialized\n");
 }
@@ -244,7 +244,7 @@ void resource_fire_net(struct thread *pt, int transition_index, const char *func
 			}
 			resource_fire_single_transition(pt, transition_index);
 			/* Log del disparo exitoso de la transición */
-             rn_log_transition(pt, transition_index, func, NULL);
+         //    rn_log_transition(pt, transition_index, func, NULL);
 
 		} else {
 			log(LOG_WARNING, "(resource_net) from %s Thread %2d (%s), CPU%2d: %s (%d) no sensibilizada\n", func, pt->td_tid, pt->td_proc->p_comm, PCPU_GET(cpuid), transitions_names[transition_index], transition_index);

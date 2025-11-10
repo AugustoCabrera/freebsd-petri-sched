@@ -58,6 +58,7 @@
 #include <sys/umtxvar.h>
 #include <machine/pcb.h>
 #include <machine/smp.h>
+#include <sys/sched_petri_rnlog.h> 
 
 #ifdef HWPMC_HOOKS
 #include <sys/pmckern.h>
@@ -1540,8 +1541,12 @@ sched_choose(void)
 		td = tdcpu;
 		rq = &runq_pcpu[cpu_n];
 
-		if (td) //active thread available
+		if (td){
 			resource_fire_net(td, TRANSITION(cpu_n, TRAN_UNQUEUE), "sched_choose"); // (no FSM call)
+
+			rn_log_transition(td, TRANSITION(cpu_n, TRAN_UNQUEUE), "sched_choose", NULL);
+		} //active thread available
+		
 		else if (is_cpu_suspended(cpu_n)) { //CPU suspended -> no active thread 
 			wakeup_if_needed(idletd);
 			resource_fire_net(idletd, TRANSITION(cpu_n, TRAN_EXEC_IDLE), "sched_choose_4");
