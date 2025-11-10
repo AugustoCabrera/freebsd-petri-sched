@@ -14,15 +14,14 @@
 #include <sys/pcpu.h>
 #include <sys/syslog.h>   /* LOG_INFO */
 
-
 /* Estado de captura y filtros */
 static int      rn_capture = 0;            /* 0=off, 1=on (acceso atómico) */
-static unsigned rn_cpumask = 0xFFFFFFFFu;  /* bit N habilita CPU N */
+static unsigned rn_cpumask = 0xFFFFFFFFu;  /* bit N habilita CPU N (32 bits) */
 static int      rn_pid_filter = -1;        /* -1 = cualquiera, otro = PID exacto */
 static unsigned rn_session = 0;            /* optional session id (acceso atómico) */
 
 #if RNLOG_WITH_SEQ
-static unsigned rn_seq_cpu[256];           /* contador por-CPU (acceso atómico) */
+static unsigned rn_seq_cpu[MAXCPU];        /* contador por-CPU (acceso atómico) */
 #endif
 
 /* Declarar el nodo existente kern.sched, NO volver a crearlo */
@@ -42,10 +41,29 @@ SYSCTL_UINT(_kern_sched_rn, OID_AUTO, session, CTLFLAG_RWTUN,
     &rn_session, 0, "Optional session id (not printed unless compiled)");
 
 /* Setters programáticos (usan acceso atómico donde corresponde) */
-void rnlog_enable(int on)                  { __atomic_store_n(&rn_capture, on ? 1 : 0, __ATOMIC_RELAXED); }
-void rnlog_set_cpumask(unsigned mask)      { rn_cpumask = mask; }
-void rnlog_set_pid(int pid)                { rn_pid_filter = pid; }
-void rnlog_set_session(unsigned sess)      { __atomic_store_n(&rn_session, sess, __ATOMIC_RELAXED); }
+void
+rnlog_enable(int on)
+{
+    __atomic_store_n(&rn_capture, on ? 1 : 0, __ATOMIC_RELAXED);
+}
+
+void
+rnlog_set_cpumask(unsigned mask)
+{
+    rn_cpumask = mask;
+}
+
+void
+rnlog_set_pid(int pid)
+{
+    rn_pid_filter = pid;
+}
+
+void
+rnlog_set_session(unsigned sess)
+{
+    __atomic_store_n(&rn_session, sess, __ATOMIC_RELAXED);
+}
 
 /* Filtro rápido para saber si loguear este evento para el thread dado */
 int
@@ -55,6 +73,9 @@ rnlog_should_log(struct thread *td)
         return 0;
 
     unsigned cpu = (unsigned)PCPU_GET(cpuid);
+    if (cpu >= MAXCPU)
+        return 0; /* paranoia: id de CPU inválido */
+
     if (((rn_cpumask >> cpu) & 1u) == 0)
         return 0;
 
@@ -78,7 +99,11 @@ rn_log_transition(struct thread *td, int tindex, const char *func, const char *n
         return;
 
     unsigned cpu = (unsigned)PCPU_GET(cpuid);
+    if (cpu >= MAXCPU)
+        return;
+
     unsigned tid = (unsigned)td->td_tid;
+
     /* p_comm es un array (char[]), no puntero: chequear primer char */
     const char *pname = (td->td_proc && td->td_proc->p_comm[0] != '\0')
                         ? td->td_proc->p_comm : "unknown";

@@ -10,16 +10,16 @@
 #include <sys/types.h>
 struct thread;
 
-/* Compile-time knobs */
+/* Compile-time knobs (pueden ser override via -D o options del kernel) */
 #ifndef RNLOG_WITH_SEQ
-#define RNLOG_WITH_SEQ 0
+#define RNLOG_WITH_SEQ 1   /* default: habilitado para medir drops */
 #endif
 
 #ifndef RNLOG_WITH_SESSION
-#define RNLOG_WITH_SESSION 0
+#define RNLOG_WITH_SESSION 0 /* default: deshabilitado */
 #endif
 
-/* external from your scheduler code */
+/* (Opcional) símbolo externo si lo usás para mapear índices → nombre */
 extern const char *rn_name_from_index(int tindex, char *buf, size_t size);
 
 /* API */

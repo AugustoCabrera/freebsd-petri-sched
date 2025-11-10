@@ -151,6 +151,8 @@ init_cpu_matrix(int cpu_n)
 		}
 	}
 
+	// VER COMO CRECE ESTA M_INC X CORE !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
 	//incidence between each cpu and global resources
 	resource_net->incidence_matrix[PLACE_GLOBAL_QUEUE][TRANSITION(cpu_n, TRAN_FROM_GLOBAL_CPU)] = -1;
 
