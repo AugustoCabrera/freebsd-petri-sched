@@ -1561,6 +1561,7 @@ sched_choose(void)
 			CTR1(KTR_RUNQ, "choosing td_sched %p from main runq", td);
 			resource_fire_net(td, TRANSITION(cpu_n, TRAN_FROM_GLOBAL_CPU), "sched_choose");
 			// (no FSM call)
+			rn_log_transition(td, TRANSITION(cpu_n, TRAN_FROM_GLOBAL_CPU), "sched_choose", NULL);
 		} else //si la cpu no esta disponible para el hilo hago que se ejecute idlethread?
 			td = NULL;
 	}

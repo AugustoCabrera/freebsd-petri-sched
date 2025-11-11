@@ -1,6 +1,23 @@
 // loadpulse.c — generador de carga en ráfagas (CPU-on / sleep-off)
 // FreeBSD-friendly: afinidad con cpuset(2).
 // Compilar: cc -O2 -std=c11 -pthread loadpulse.c -o loadpulse
+
+
+
+
+/*
+Baja carga (≈10% duty, pausas largas):
+./loadpulse -t 2 -on 10 -off 90 -pin -nice 5
+
+Media carga (≈50% duty, balanceado):
+./loadpulse -t 8 -on 50 -off 50 -pin
+
+Hard carga (≈100% duty, sin descanso, satura cores):
+./loadpulse -t $(sysctl -n hw.ncpu) -on 100 -off 0 -pin -nice -5
+*/
+
+
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
