@@ -2,7 +2,8 @@
 #include <sys/sched_petri.h>
 #include <sys/syslog.h>
 #include <sys/malloc.h>
-
+#include <sys/param.h>
+#include <sys/sysctl.h>
 
 #include <sys/systm.h>           	/* snprintf, log, etc. */
 #include <sys/sched_petri_rnlog.h>  /* rn_log_transition(), rnlog_should_log(), etc. */
@@ -495,3 +496,90 @@ init_pointer(size_t size)
 
     return pointer;
 }
+
+
+
+//////////////////////////////////////////////////////////////////////////////////////
+/*
+ * Test code:
+ *
+ * The sysctl handlers below allow us to trigger the functions
+ *   void turn_off_cpu(int cpu)
+ *   void turn_on_cpu(int cpu)
+ * from userland via sysctl(8), in order to verify that the
+ * resource net correctly models CPU on/off transitions.
+ */
+//////////////////////////////////////////////////////////////////////////////////////
+
+
+
+/*
+ * Base node: kern.petri
+ */
+SYSCTL_NODE(_kern, OID_AUTO, petri,
+    CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "Petri scheduler controls");
+
+/*
+ * Handler: write a CPU id and that CPU will be turned OFF.
+ * Usage from userland:
+ *   sysctl kern.petri.turn_off_cpu=<n>
+ */
+static int
+sysctl_petri_turn_off_cpu(SYSCTL_HANDLER_ARGS)
+{
+    int error;
+    int cpu = -1;
+
+    /* Get the value written from userland */
+    error = sysctl_handle_int(oidp, &cpu, 0, req);
+    if (error || req->newptr == NULL)
+        return (error);     /* read-only access or error */
+
+    /* Basic validation */
+    if (cpu <= 0 || cpu >= CPU_NUMBER)
+        return (EINVAL);
+
+    /* Call the Petri-net function that turns a CPU off */
+    turn_off_cpu(cpu);
+
+    return (0);
+}
+
+/* sysctl: kern.petri.turn_off_cpu */
+SYSCTL_PROC(_kern_petri, OID_AUTO, turn_off_cpu,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+    0, 0, sysctl_petri_turn_off_cpu, "I",
+    "Turn off the given CPU (write CPU id)");
+
+/*
+ * Symmetric sysctl to turn a specific CPU ON.
+ * Usage from userland:
+ *   sysctl kern.petri.turn_on_cpu=<n>
+ */
+static int
+sysctl_petri_turn_on_cpu(SYSCTL_HANDLER_ARGS)
+{
+    int error;
+    int cpu = -1;
+
+    /* Get the value written from userland */
+    error = sysctl_handle_int(oidp, &cpu, 0, req);
+    if (error || req->newptr == NULL)
+        return (error);     /* read-only access or error */
+
+    /* Basic validation */
+    if (cpu <= 0 || cpu >= CPU_NUMBER)
+        return (EINVAL);
+
+    /* Call the Petri-net function that turns a CPU on */
+    turn_on_cpu(cpu);
+
+    return (0);
+}
+
+/* sysctl: kern.petri.turn_on_cpu */
+SYSCTL_PROC(_kern_petri, OID_AUTO, turn_on_cpu,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+    0, 0, sysctl_petri_turn_on_cpu, "I",
+    "Turn on the given CPU (write CPU id)");
