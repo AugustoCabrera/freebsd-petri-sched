@@ -1304,12 +1304,23 @@ sched_pickcpu(struct thread *td)
 	mtx_assert(&sched_lock, MA_OWNED);
 
 	transition = resource_choose_cpu(td);
-	if (transition == TRAN_QUEUE_GLOBAL)
-		cpu = NOCPU;
-	else
-		cpu = (int)(transition / CPU_BASE_TRANSITIONS);
 
-	KASSERT(cpu != NOCPU, ("no valid CPUs"));
+	if (transition == TRAN_QUEUE_GLOBAL) {
+		/*
+		 * La red de Petri no eligió un CPU concreto (cola global).
+		 * En este contexto necesitamos un CPU específico, así que
+		 * usamos como fallback la CPU actual.
+		 */
+		cpu = PCPU_GET(cpuid);
+	} else {
+		cpu = (int)(transition / CPU_BASE_TRANSITIONS);
+	}
+
+	/* El cpu debe ser válido para la red de Petri. */
+	KASSERT(cpu >= 0 && cpu < CPU_NUMBER,
+	    ("sched_pickcpu: cpu=%d fuera de rango Petri (CPU_NUMBER=%d)",
+	     cpu, CPU_NUMBER));
+
 	return (cpu);
 }
 #endif

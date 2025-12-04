@@ -24,11 +24,11 @@ options 	UFS_GJOURNAL		# Enable gjournal-based UFS journaling
 options 	QUOTA			# Enable disk quotas for UFS
 options 	MD_ROOT			# MD is a potential root device
 
- options     INVARIANTS           # Enable extra sanity checks throughout the kernel
- options     INVARIANT_SUPPORT    # Allow building both with and without INVARIANTS
- options     DIAGNOSTIC           # Add additional diagnostic kernel checks
- options     WITNESS              # Detect potential deadlocks in locking (mutexes, etc.)
- options     WITNESS_SKIPSPIN     # Skip witness checks on spin locks (reduce overhead)
+options     INVARIANTS           # Enable extra sanity checks throughout the kernel
+options     INVARIANT_SUPPORT    # Allow building both with and without INVARIANTS
+options     DIAGNOSTIC           # Add additional diagnostic kernel checks
+options     WITNESS              # Detect potential deadlocks in locking (mutexes, etc.)
+options     WITNESS_SKIPSPIN     # Skip witness checks on spin locks (reduce overhead)
 
 
 #options 	COMPAT_FREEBSD32	# Compatible with i386 binaries
