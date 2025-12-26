@@ -58,6 +58,7 @@
 #include <sys/umtxvar.h>
 #include <machine/pcb.h>
 #include <machine/smp.h>
+#include <sys/sched_petri_rnlog.h> 
 
 #ifdef HWPMC_HOOKS
 #include <sys/pmckern.h>
@@ -1303,12 +1304,23 @@ sched_pickcpu(struct thread *td)
 	mtx_assert(&sched_lock, MA_OWNED);
 
 	transition = resource_choose_cpu(td);
-	if (transition == TRAN_QUEUE_GLOBAL)
-		cpu = NOCPU;
-	else
-		cpu = (int)(transition / CPU_BASE_TRANSITIONS);
 
-	KASSERT(cpu != NOCPU, ("no valid CPUs"));
+	if (transition == TRAN_QUEUE_GLOBAL) {
+		/*
+		 * La red de Petri no eligió un CPU concreto (cola global).
+		 * En este contexto necesitamos un CPU específico, así que
+		 * usamos como fallback la CPU actual.
+		 */
+		cpu = PCPU_GET(cpuid);
+	} else {
+		cpu = (int)(transition / CPU_BASE_TRANSITIONS);
+	}
+
+	/* El cpu debe ser válido para la red de Petri. */
+	KASSERT(cpu >= 0 && cpu < CPU_NUMBER,
+	    ("sched_pickcpu: cpu=%d fuera de rango Petri (CPU_NUMBER=%d)",
+	     cpu, CPU_NUMBER));
+
 	return (cpu);
 }
 #endif
@@ -1540,8 +1552,12 @@ sched_choose(void)
 		td = tdcpu;
 		rq = &runq_pcpu[cpu_n];
 
-		if (td) //active thread available
+		if (td){
 			resource_fire_net(td, TRANSITION(cpu_n, TRAN_UNQUEUE), "sched_choose"); // (no FSM call)
+
+			rn_log_transition(td, TRANSITION(cpu_n, TRAN_UNQUEUE), "sched_choose", NULL);
+		} //active thread available
+		
 		else if (is_cpu_suspended(cpu_n)) { //CPU suspended -> no active thread 
 			wakeup_if_needed(idletd);
 			resource_fire_net(idletd, TRANSITION(cpu_n, TRAN_EXEC_IDLE), "sched_choose_4");
@@ -1556,6 +1572,7 @@ sched_choose(void)
 			CTR1(KTR_RUNQ, "choosing td_sched %p from main runq", td);
 			resource_fire_net(td, TRANSITION(cpu_n, TRAN_FROM_GLOBAL_CPU), "sched_choose");
 			// (no FSM call)
+			rn_log_transition(td, TRANSITION(cpu_n, TRAN_FROM_GLOBAL_CPU), "sched_choose", NULL);
 		} else //si la cpu no esta disponible para el hilo hago que se ejecute idlethread?
 			td = NULL;
 	}

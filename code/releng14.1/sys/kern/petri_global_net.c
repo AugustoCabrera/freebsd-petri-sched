@@ -2,6 +2,12 @@
 #include <sys/sched_petri.h>
 #include <sys/syslog.h>
 #include <sys/malloc.h>
+#include <sys/param.h>
+#include <sys/sysctl.h>
+
+#include <sys/systm.h>           	/* snprintf, log, etc. */
+#include <sys/sched_petri_rnlog.h>  /* rn_log_transition(), rnlog_should_log(), etc. */
+
 
 int CPU_NUMBER;
 int CPU_NUMBER_PLACES;
@@ -187,6 +193,8 @@ init_resource_net(void)
 	init_per_cpu_resources();
 	init_global_resources();
 
+	rn_dump_resource_matrices_full();
+
 	log(LOG_KERN, "Petri scheduler resource net initialized\n");
 }
 
@@ -226,6 +234,8 @@ void resource_fire_net(struct thread *pt, int transition_index, const char *func
 		if (!smp_set && smp_started) {
 			smp_set = 1;
 			resource_fire_single_transition(pt, TRAN_START_SMP);
+            /* Log del arranque SMP automático */
+            rn_log_transition(pt, TRAN_START_SMP, func, "auto");
 		}
 
 		if (transition_is_sensitized(transition_index)) {
@@ -234,6 +244,8 @@ void resource_fire_net(struct thread *pt, int transition_index, const char *func
 				print--;
 			}
 			resource_fire_single_transition(pt, transition_index);
+			/* Log del disparo exitoso de la transición */
+         //    rn_log_transition(pt, transition_index, func, NULL);
 
 		} else {
 			log(LOG_WARNING, "(resource_net) from %s Thread %2d (%s), CPU%2d: %s (%d) no sensibilizada\n", func, pt->td_tid, pt->td_proc->p_comm, PCPU_GET(cpuid), transitions_names[transition_index], transition_index);
@@ -484,3 +496,90 @@ init_pointer(size_t size)
 
     return pointer;
 }
+
+
+
+//////////////////////////////////////////////////////////////////////////////////////
+/*
+ * Test code:
+ *
+ * The sysctl handlers below allow us to trigger the functions
+ *   void turn_off_cpu(int cpu)
+ *   void turn_on_cpu(int cpu)
+ * from userland via sysctl(8), in order to verify that the
+ * resource net correctly models CPU on/off transitions.
+ */
+//////////////////////////////////////////////////////////////////////////////////////
+
+
+
+/*
+ * Base node: kern.petri
+ */
+SYSCTL_NODE(_kern, OID_AUTO, petri,
+    CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "Petri scheduler controls");
+
+/*
+ * Handler: write a CPU id and that CPU will be turned OFF.
+ * Usage from userland:
+ *   sysctl kern.petri.turn_off_cpu=<n>
+ */
+static int
+sysctl_petri_turn_off_cpu(SYSCTL_HANDLER_ARGS)
+{
+    int error;
+    int cpu = -1;
+
+    /* Get the value written from userland */
+    error = sysctl_handle_int(oidp, &cpu, 0, req);
+    if (error || req->newptr == NULL)
+        return (error);     /* read-only access or error */
+
+    /* Basic validation */
+    if (cpu <= 0 || cpu >= CPU_NUMBER)
+        return (EINVAL);
+
+    /* Call the Petri-net function that turns a CPU off */
+    turn_off_cpu(cpu);
+
+    return (0);
+}
+
+/* sysctl: kern.petri.turn_off_cpu */
+SYSCTL_PROC(_kern_petri, OID_AUTO, turn_off_cpu,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+    0, 0, sysctl_petri_turn_off_cpu, "I",
+    "Turn off the given CPU (write CPU id)");
+
+/*
+ * Symmetric sysctl to turn a specific CPU ON.
+ * Usage from userland:
+ *   sysctl kern.petri.turn_on_cpu=<n>
+ */
+static int
+sysctl_petri_turn_on_cpu(SYSCTL_HANDLER_ARGS)
+{
+    int error;
+    int cpu = -1;
+
+    /* Get the value written from userland */
+    error = sysctl_handle_int(oidp, &cpu, 0, req);
+    if (error || req->newptr == NULL)
+        return (error);     /* read-only access or error */
+
+    /* Basic validation */
+    if (cpu <= 0 || cpu >= CPU_NUMBER)
+        return (EINVAL);
+
+    /* Call the Petri-net function that turns a CPU on */
+    turn_on_cpu(cpu);
+
+    return (0);
+}
+
+/* sysctl: kern.petri.turn_on_cpu */
+SYSCTL_PROC(_kern_petri, OID_AUTO, turn_on_cpu,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+    0, 0, sysctl_petri_turn_on_cpu, "I",
+    "Turn on the given CPU (write CPU id)");
