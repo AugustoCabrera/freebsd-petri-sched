@@ -26,14 +26,15 @@ struct petri_cpu_resource_net *resource_net;
 int *monopolized_cpus_per_proc = NULL;
 
 const int base_resource_matrix[CPU_BASE_PLACES][CPU_BASE_TRANSITIONS] = {
-	/*Base matrix */
-//AD EX EXID FRGL REMQ RETIN RETV SUS UNQ WUP	
-	{ 0, 0,-1,-1, 0, 1, 1, 0,-1, 0 },//CPU
-	{ 0, 1, 0, 0, 0,-1,-1, 0, 0, 0 },//EXEC
-	{ 1, 0, 0, 0,-1, 0, 0, 0,-1, 0 },//Q
-	{ 0, 0, 0, 0, 0, 0, 0, 1, 0,-1 },//SUSD
-	{ 0,-1, 1, 1, 0, 0, 0, 0, 1, 0 }//TOEX
+    // AD  EX  EXID  FRGL  REMQ  RETIN  RETV  RESERV  UNQ  UNRES  DISABLE  ENABLE  ADDBOU  FRGLBOU
+    {  0,  0,  -1,   -1,    0,     1,     1,     0,   -1,    0,      0,      0,      0,     -1 }, // CPU
+    {  0,  1,   0,    0,    0,    -1,    -1,     0,    0,    0,      0,      0,      0,      0 }, // EXEC
+    {  1,  0,   0,    0,   -1,     0,     0,     0,   -1,    0,      0,      0,      1,      0 }, // Q
+    {  0,  0,   0,    0,    0,     0,     0,     1,    0,   -1,      0,      0,      0,      0 }, // RESERVED
+    {  0, -1,   1,    1,    0,     0,     0,     0,    1,    0,      0,      0,      0,      1 }, // TOEX
+    {  0,  0,   0,    0,    0,     0,     0,     0,    0,    0,      1,     -1,      0,      0 }  // DISABLED
 };
+
 
 const int base_resource_inhibition_matrix[CPU_BASE_PLACES][CPU_BASE_TRANSITIONS] = {
 	/*Base inhibition matrix */
