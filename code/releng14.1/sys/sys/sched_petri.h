@@ -44,16 +44,23 @@ extern int PLACE_SMP_NOT_READY;
 extern int PLACE_SMP_READY; 	
 
 /* Definitions of transitions of the CPU resource net */
-#define TRAN_ADDTOQUEUE 		0
-#define TRAN_EXEC 				1
-#define TRAN_EXEC_IDLE			2
-#define TRAN_FROM_GLOBAL_CPU 	3
-#define TRAN_REMOVE_QUEUE 		4
-#define TRAN_RETURN_INVOL 		5
-#define TRAN_RETURN_VOL 		6
-#define TRAN_SUSPEND_PROC		7
-#define TRAN_UNQUEUE 			8
-#define TRAN_WAKEUP_PROC		9
+#define TRAN_ADDTOQUEUE             0   // AD
+#define TRAN_EXEC                  1   // EX
+#define TRAN_EXEC_IDLE             2   // EXID
+#define TRAN_FROM_GLOBAL_CPU       3   // FRGL
+#define TRAN_REMOVE_QUEUE          4   // REMQ
+#define TRAN_RETURN_INVOL          5   // RETIN
+#define TRAN_RETURN_VOL            6   // RETV
+
+#define TRAN_CPU_RESERVE           7   // RESERV
+#define TRAN_UNQUEUE               8   // UNQ
+#define TRAN_CPU_UNRESERVE         9   // UNRES
+#define TRAN_CPU_DISABLE          10   // DISABLE
+#define TRAN_CPU_ENABLE           11   // ENABLE
+
+#define TRAN_ADDTOQUEUE_BOUND     12   // ADDBOU
+#define TRAN_FROM_GLOBAL_BOUND_CPU 13  // FRGLBOU
+
 
 #define GLOBAL_TRANSITIONS	3
 extern int TRAN_REMOVE_GLOBAL_QUEUE; 	
