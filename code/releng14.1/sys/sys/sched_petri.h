@@ -121,7 +121,8 @@ void wakeup_if_needed(struct thread *td);
 //Petri Global Methods
 int  resource_choose_cpu(struct thread *td);
 bool cpu_available_for_proc(int proc_id, int cpu);
-bool is_cpu_suspended(int cpu_n);
+bool is_cpu_disabled(int cpu_n);
+bool is_cpu_reserved(int cpu_n);
 void get_monopolized_cpus(int *dst);
 void free_double_pointer(void** pointer, int rows); 
 bool transition_is_sensitized(int transition_index);
