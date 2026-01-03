@@ -1537,7 +1537,7 @@ sched_choose(void)
 	td = runq_choose_fuzz(&runq, runq_fuzz); // Selecciona un thread de la cola global
 	tdcpu = runq_choose(&runq_pcpu[cpu_n]); // Selecciona un thread de la cola de la CPU que está corriendo
 
-	if (is_cpu_suspended(cpu_n) || 
+	if (is_cpu_disabled(cpu_n) || 
 		td == NULL ||
 	    (tdcpu != NULL &&
 	     tdcpu->td_priority < td->td_priority)) {
@@ -1558,7 +1558,7 @@ sched_choose(void)
 			rn_log_transition(td, TRANSITION(cpu_n, TRAN_UNQUEUE), "sched_choose", NULL);
 		} //active thread available
 		
-		else if (is_cpu_suspended(cpu_n)) { //CPU suspended -> no active thread 
+		else if (is_cpu_disabled(cpu_n)) { //CPU suspended -> no active thread 
 			wakeup_if_needed(idletd);
 			resource_fire_net(idletd, TRANSITION(cpu_n, TRAN_EXEC_IDLE), "sched_choose_4");
 			idletd->mark = thread_fire[THREAD_RUNQ];

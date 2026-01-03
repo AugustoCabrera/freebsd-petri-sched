@@ -446,7 +446,7 @@ toggle_pin_cpu_to_proc(int proc_id, int cpu, bool release)
 		return true;
 	}
 
-	if (!cpu_available_for_proc(proc_id, cpu) || is_cpu_suspended(cpu) || (proc_id < 1))
+	if (!cpu_available_for_proc(proc_id, cpu) || is_cpu_disabled(cpu) || (proc_id < 1))
 		return false;
 		
 	monopolized_cpus_per_proc[cpu] = proc_id; //monopolize
