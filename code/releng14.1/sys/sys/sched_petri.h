@@ -17,8 +17,8 @@
 #define PLACE(cpu, place)            (CPU_BASE_PLACE(cpu) + (place))
 
 /* Definition of constants of the resource petri net */
-#define CPU_BASE_PLACES 		5
-#define CPU_BASE_TRANSITIONS	10
+#define CPU_BASE_PLACES 		6
+#define CPU_BASE_TRANSITIONS	14
 extern int CPU_NUMBER; //will be defined at runtime with mp_ncpus			
 extern int CPU_NUMBER_PLACES; 		
 extern int CPU_NUMBER_TRANSITIONS; 	
