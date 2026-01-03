@@ -47,25 +47,25 @@ const int base_resource_inhibition_matrix[CPU_BASE_PLACES][CPU_BASE_TRANSITIONS]
 };
 
 
-int hierarchical_transitions[HIERARCHICAL_TRANSITIONS] = {
-	TRAN_ADDTOQUEUE,
-	TRAN_EXEC,
-	TRAN_EXEC_IDLE,
-	TRAN_RETURN_INVOL,
-	TRAN_RETURN_VOL,
-	TRAN_REMOVE_QUEUE
-};
+// int hierarchical_transitions[HIERARCHICAL_TRANSITIONS] = {
+// 	TRAN_ADDTOQUEUE,
+// 	TRAN_EXEC,
+// 	TRAN_EXEC_IDLE,
+// 	TRAN_RETURN_INVOL,
+// 	TRAN_RETURN_VOL,
+// 	TRAN_REMOVE_QUEUE
+// };
 
-const int hierarchical_corresponse[HIERARCHICAL_TRANSITIONS] = { 
-	TRAN_ON_QUEUE, 
-	TRAN_SET_RUNNING, 
-	TRAN_ON_QUEUE, 
-	TRAN_SWITCH_OUT, 
-	TRAN_TO_WAIT_CHANNEL, 
-	TRAN_REMOVE, 	
-	TRAN_ON_QUEUE, 	
-	TRAN_REMOVE 
-};
+// const int hierarchical_corresponse[HIERARCHICAL_TRANSITIONS] = { 
+// 	TRAN_ON_QUEUE, 
+// 	TRAN_SET_RUNNING, 
+// 	TRAN_ON_QUEUE, 
+// 	TRAN_SWITCH_OUT, 
+// 	TRAN_TO_WAIT_CHANNEL, 
+// 	TRAN_REMOVE, 	
+// 	TRAN_ON_QUEUE, 	
+// 	TRAN_REMOVE 
+// };
 
 const char *transitions_names[] = {
     /* P0 */
@@ -149,8 +149,8 @@ init_global_resources(void)
 {
 
 	//add global hierarchical transitions
-	hierarchical_transitions[PER_CPU_HIER_TRANSITIONS] = TRAN_QUEUE_GLOBAL;
-	hierarchical_transitions[PER_CPU_HIER_TRANSITIONS + 1] = TRAN_REMOVE_GLOBAL_QUEUE;
+	// hierarchical_transitions[PER_CPU_HIER_TRANSITIONS] = TRAN_QUEUE_GLOBAL;
+	// hierarchical_transitions[PER_CPU_HIER_TRANSITIONS + 1] = TRAN_REMOVE_GLOBAL_QUEUE;
 
 	//Transition to remove from global queue
 	resource_net->incidence_matrix[PLACE_GLOBAL_QUEUE][TRAN_REMOVE_GLOBAL_QUEUE] = -1;
@@ -256,11 +256,12 @@ is_inhibited(int places_index, int transition_index)
 // 	return 0;
 // }
 
-bool 
-is_cpu_suspended(int cpu_n)
+bool
+is_cpu_disabled(int cpu_n)
 {
-	return resource_net->mark[PLACE(cpu_n, PLACE_SUSPENDED)] > 0;
+    return resource_net->mark[PLACE(cpu_n, PLACE_DISABLED)] > 0;
 }
+
 
 /**
  * fire the transition passed as param to the function
@@ -401,7 +402,7 @@ toggle_active_cpu(int cpu, bool turn_off)
 		return false;
 	}
 
-	const int base_tr = turn_off ? TRAN_SUSPEND_PROC : TRAN_WAKEUP_PROC;
+	const int base_tr = turn_off ? TRAN_CPU_DISABLE : TRAN_CPU_ENABLE;
     const int tr = TRANSITION(cpu, base_tr);
     const char *action = turn_off ? "turned off" : "turned on";
 
