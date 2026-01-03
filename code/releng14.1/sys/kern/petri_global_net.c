@@ -262,6 +262,14 @@ is_cpu_disabled(int cpu_n)
     return resource_net->mark[PLACE(cpu_n, PLACE_DISABLED)] > 0;
 }
 
+bool
+is_cpu_reserved(int cpu_n)
+{
+    return resource_net->mark[PLACE(cpu_n, PLACE_RESERVED)] > 0;
+}
+
+
+
 
 /**
  * fire the transition passed as param to the function

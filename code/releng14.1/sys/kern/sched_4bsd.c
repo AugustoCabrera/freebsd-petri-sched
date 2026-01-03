@@ -1376,38 +1376,60 @@ sched_add(struct thread *td, int flags)
 	 * as per-CPU state may not be initialized yet and we may crash if we
 	 * try to access the per-CPU run queues.
 	 */
-	int boundcpu = ts->ts_runq - &runq_pcpu[0];
-	if (smp_started && (td->td_pinned != 0 || td->td_flags & TDF_BOUND ||
-	    ts->ts_flags & TSF_AFFINITY)) {
-		if (td->td_pinned != 0) 
-			cpu = td->td_lastcpu;
-		else if (td->td_flags & TDF_BOUND && 
-				transition_is_sensitized(TRANSITION(boundcpu, TRAN_ADDTOQUEUE))) {
-			/* Find CPU from bound runq. */
-			KASSERT(SKE_RUNQ_PCPU(ts),
-			    ("sched_add: bound td_sched not on cpu runq"));
-			cpu = boundcpu;
-		} else
-			/* Find a valid CPU for our cpuset */
-			cpu = sched_pickcpu(td);
+	/* boundcpu SOLO es válido si ts_runq apunta a runq_pcpu[] */
+int boundcpu = SKE_RUNQ_PCPU(ts) ? (int)(ts->ts_runq - &runq_pcpu[0]) : -1;
 
-		ts->ts_runq = &runq_pcpu[cpu];
-		single_cpu = 1;
-		CTR3(KTR_RUNQ,
-		    "sched_add: Put td_sched:%p(td:%p) on cpu%d runq", ts, td,
-		    cpu);
+if (smp_started && (td->td_pinned != 0 || (td->td_flags & TDF_BOUND) ||
+    (ts->ts_flags & TSF_AFFINITY))) {
 
-		resource_fire_net(td, TRANSITION(cpu, TRAN_ADDTOQUEUE), "sched_add");
-		td->mark = thread_fire[THREAD_RUNQ];
-	} else {
-		CTR2(KTR_RUNQ,
-		    "sched_add: adding td_sched:%p (td:%p) to gbl runq", ts,
-		    td);
-		cpu = NOCPU;
-		ts->ts_runq = &runq;
-		resource_fire_net(td, TRAN_QUEUE_GLOBAL, "sched_add");
-		// (no FSM call)
-	}
+    int enqueue_tr = TRAN_ADDTOQUEUE;
+
+    if (td->td_pinned != 0) {
+        cpu = td->td_lastcpu;
+
+        /* opcional: si también querés honor bound enqueue en pinned, lo podés poner acá */
+        enqueue_tr = TRAN_ADDTOQUEUE;
+
+    } else if ((td->td_flags & TDF_BOUND) && boundcpu >= 0) {
+        /* Thread bound: el CPU “target” es el de su runq per-cpu */
+        cpu = (u_int)boundcpu;
+
+        /*
+         * REGLA NUEVA:
+         * si hay token en RESERVED de ese core, intentá ADDTOQUEUE_BOUND.
+         * Si no, hacé lo de siempre.
+         */
+        if (is_cpu_reserved(cpu) &&
+            transition_is_sensitized(TRANSITION(cpu, TRAN_ADDTOQUEUE_BOUND))) {
+            enqueue_tr = TRAN_ADDTOQUEUE_BOUND;
+        } else if (!transition_is_sensitized(TRANSITION(cpu, TRAN_ADDTOQUEUE))) {
+            /*
+             * “como ya está”: si no se puede encolar al boundcpu,
+             * elegí otro CPU válido para el cpuset.
+             */
+            cpu = sched_pickcpu(td);
+            enqueue_tr = TRAN_ADDTOQUEUE;
+        }
+
+    } else {
+        /* Afinidad (no bound): elegí CPU normal */
+        cpu = sched_pickcpu(td);
+        enqueue_tr = TRAN_ADDTOQUEUE;
+    }
+
+    ts->ts_runq = &runq_pcpu[cpu];
+    single_cpu = 1;
+
+    resource_fire_net(td, TRANSITION(cpu, enqueue_tr), "sched_add");
+    td->mark = thread_fire[THREAD_RUNQ];
+
+} else {
+    cpu = NOCPU;
+    ts->ts_runq = &runq;
+    resource_fire_net(td, TRAN_QUEUE_GLOBAL, "sched_add");
+    // (no FSM call)
+}
+
 
 	if ((td->td_flags & TDF_NOLOAD) == 0)
 		sched_load_add();
