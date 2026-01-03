@@ -30,11 +30,13 @@ extern int PER_CPU_LAST_TRANSITION;
 #define HIERARCHICAL_TRANSITIONS 	(PER_CPU_HIER_TRANSITIONS + GLOBAL_HIER_TRANSITIONS)
 
 /* Definitions of places of the CPU resource net */
-#define PLACE_CPU 		0
-#define PLACE_EXECUTING 1
-#define PLACE_QUEUE 	2
-#define PLACE_SUSPENDED	3
-#define PLACE_TOEXEC 	4
+#define PLACE_CPU        0
+#define PLACE_EXECUTING  1
+#define PLACE_QUEUE      2
+#define PLACE_RESERVED   3
+#define PLACE_TOEXEC     4
+#define PLACE_DISABLED   5
+
 
 #define GLOBAL_PLACES	3
 extern int PLACE_GLOBAL_QUEUE; 	
