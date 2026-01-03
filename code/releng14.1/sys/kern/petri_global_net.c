@@ -37,13 +37,15 @@ const int base_resource_matrix[CPU_BASE_PLACES][CPU_BASE_TRANSITIONS] = {
 
 
 const int base_resource_inhibition_matrix[CPU_BASE_PLACES][CPU_BASE_TRANSITIONS] = {
-	/*Base inhibition matrix */
-	{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-	{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-	{ 0, 0, 1, 0, 0, 0, 0, 0, 0, 0 },
-	{ 1, 0, 0, 1, 0, 0, 0, 0, 0, 0 },
-	{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
+    // AD  EX  EXID  FRGL  REMQ  RETIN  RETV  RESERV  UNQ  UNRES  DISABLE  ENABLE  ADDBOU  FRGLBOU
+    {  0,  0,   0,    0,    0,     0,     0,     0,    0,    0,      0,      0,      0,      0 }, // CPU
+    {  0,  0,   0,    0,    0,     0,     0,     0,    0,    0,      0,      0,      0,      0 }, // EXEC
+    {  0,  0,   1,    0,    0,     0,     0,     0,    0,    0,      0,      0,      0,      0 }, // Q
+    {  1,  0,   0,    1,    0,     0,     0,     0,    0,    0,      1,      0,      0,      0 }, // RESERVED
+    {  0,  0,   0,    0,    0,     0,     0,     0,    0,    0,      0,      0,      0,      0 }, // TOEX
+    {  1,  0,   0,    1,    0,     0,     0,     1,    0,    0,      0,      0,      1,      1 }  // DISABLED
 };
+
 
 int hierarchical_transitions[HIERARCHICAL_TRANSITIONS] = {
 	TRAN_ADDTOQUEUE,
