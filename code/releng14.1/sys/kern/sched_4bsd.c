@@ -689,7 +689,15 @@ int
 sched_runnable(void)
 {
 #ifdef SMP
-	return runq_check(&runq) + runq_check(&runq_pcpu[PCPU_GET(cpuid)]);
+	int cpu = PCPU_GET(cpuid);
+
+	if (is_cpu_disabled(cpu))
+		return (0);
+
+	if (is_cpu_reserved(cpu))
+		return runq_check(&runq_pcpu[cpu]);   /* RESERVED no mira global */
+
+	return runq_check(&runq) + runq_check(&runq_pcpu[cpu]);
 #else
 	return runq_check(&runq);
 #endif
