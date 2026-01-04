@@ -116,8 +116,6 @@ struct td_sched {
 #define SKE_RUNQ_PCPU(ts)						\
     ((ts)->ts_runq != 0 && (ts)->ts_runq != &runq)
 
-#define	THREAD_CAN_SCHED(td, cpu)	\
-    CPU_ISSET((cpu), &(td)->td_cpuset->cs_mask)
 
 _Static_assert(sizeof(struct thread) + sizeof(struct td_sched) <=
     sizeof(struct thread0_storage),
@@ -1325,29 +1323,38 @@ ts_runq_cpu(const struct td_sched *ts)
 static __inline int
 cpu_allowed_for_td(struct thread *td, struct td_sched *ts, int cpu)
 {
-	if (cpu < 0 || cpu >= CPU_NUMBER)
-		return (0);
+    int bcpu;
 
-	if (is_cpu_disabled(cpu))
-		return (0);
+    if (cpu < 0 || cpu >= CPU_NUMBER)
+        return (0);
 
-	if (is_cpu_reserved(cpu)) {
-		if ((td->td_flags & TDF_BOUND) == 0)
-			return (0);
-		if (ts_runq_cpu(ts) != cpu)
-			return (0);
-	}
+    if (is_cpu_disabled(cpu))
+        return (0);
 
-	if (!THREAD_CAN_SCHED(td, cpu))
-		return (0);
+    /* Si el thread es BOUND, solo puede correr en SU cpu, siempre. */
+    if (td->td_flags & TDF_BOUND) {
+        bcpu = ts_runq_cpu(ts);
+        if (bcpu < 0)
+            return (0); /* o KASSERT si querés detectar inconsistencia */
+        if (bcpu != cpu)
+            return (0);
+    }
 
-	/* Si esto ya chequea reserved/disabled en otro lado y querés evitar doble lógica, podés sacarlo */
-	if (!cpu_available_for_proc(td->td_proc->p_pid, cpu))
-		return (0);
+    /* Si el CPU es RESERVED, además exigimos que el thread sea bound (redundante pero claro) */
+    if (is_cpu_reserved(cpu)) {
+        if ((td->td_flags & TDF_BOUND) == 0)
+            return (0);
+    }
 
-	return (1);
+    if (!THREAD_CAN_SCHED(td, cpu))
+        return (0);
+
+    if (!cpu_available_for_proc(td->td_proc->p_pid, cpu))
+        return (0);
+
+    return (1);
 }
-#endif
+
 
 
 

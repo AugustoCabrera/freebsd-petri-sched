@@ -91,15 +91,14 @@ enum thread_place_fsm {
     THREAD_INHIBITED 	= 4
 };
 
-/* Tabla one-hot: fila = estado destino (5 enteros por fila) */
-extern const int *thread_fire[THREADS_PLACES_SIZE];
-
-
-
 //make the contract explicit for the thread FSM implementation */
 #ifndef THREADS_PLACES_SIZE
 #define THREADS_PLACES_SIZE 5
 #endif
+
+
+/* Tabla one-hot: fila = estado destino (5 enteros por fila) */
+extern const int *thread_fire[THREADS_PLACES_SIZE];
 
 
 //Petri thread Methods
