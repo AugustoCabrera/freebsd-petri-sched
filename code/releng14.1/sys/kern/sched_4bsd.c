@@ -1621,17 +1621,17 @@ sched_rem(struct thread *td)
 		runq_length[ts->ts_runq - runq_pcpu]--;
 		resource_fire_net(td, TRANSITION((ts->ts_runq - runq_pcpu), TRAN_REMOVE_QUEUE), "sched_rem");
 		td->mark = thread_fire[THREAD_CAN_RUN];
-	} else
-		resource_fire_net(td, TRAN_REMOVE_GLOBAL_QUEUE, "sched_add");
+	} else {	
+		resource_fire_net(td, TRAN_REMOVE_GLOBAL_QUEUE, "sched_rem");
 		// (no FSM call)
+		}
 #endif
 	runq_remove(ts->ts_runq, td);
 	TD_SET_CAN_RUN(td);
 }
 
 /*
- * Select threads to run.  Note that running threads still consume a
- * slot.
+ * Select threads to run.  Note that running threads still consume a slot.
  */
 struct thread *
 sched_choose(void)
@@ -1639,69 +1639,115 @@ sched_choose(void)
 	struct thread *td, *idletd;
 	struct runq *rq;
 
-	mtx_assert(&sched_lock,  MA_OWNED);
+	mtx_assert(&sched_lock, MA_OWNED);
 
-	idletd = PCPU_GET(idlethread);
-#ifdef SMP
-	int cpu_n;
-	struct thread *tdcpu;
-
-	cpu_n = PCPU_GET(cpuid);
-
-	rq = &runq; // Cola global
-	td = runq_choose_fuzz(&runq, runq_fuzz); // Selecciona un thread de la cola global
-	tdcpu = runq_choose(&runq_pcpu[cpu_n]); // Selecciona un thread de la cola de la CPU que está corriendo
-
-	if (is_cpu_disabled(cpu_n) || 
-		td == NULL ||
-	    (tdcpu != NULL &&
-	     tdcpu->td_priority < td->td_priority)) {
-		// Aca entro si
-		// 1) La CPU está suspendida
-		// 2) No hay threads en la cola global (el tdcpu puede ser null)
-		// 3) Existe un thread de la CPU y tiene mayor prioridad que el thread de la cola global
-
-		// Aca adentro el hilo SIEMPRE es el del CPU
-		CTR2(KTR_RUNQ, "choosing td %p from pcpu runq %d", tdcpu,
-		     cpu_n);
-		td = tdcpu;
-		rq = &runq_pcpu[cpu_n];
-
-		if (td){
-			resource_fire_net(td, TRANSITION(cpu_n, TRAN_UNQUEUE), "sched_choose"); // (no FSM call)
-
-			rn_log_transition(td, TRANSITION(cpu_n, TRAN_UNQUEUE), "sched_choose", NULL);
-		} //active thread available
-		
-		else if (is_cpu_disabled(cpu_n)) { //CPU suspended -> no active thread 
-			wakeup_if_needed(idletd);
-			resource_fire_net(idletd, TRANSITION(cpu_n, TRAN_EXEC_IDLE), "sched_choose_4");
-			idletd->mark = thread_fire[THREAD_RUNQ];
-			return (idletd);
-		}
-	} else {
-		// Acá se llega solo si NO hay hilos en la cola del CPU y el procesador NO está suspendido, basicamente no hace nada
-		// y llega hasta el fondo retornando el idlethread
-		if (cpu_available_for_proc(td->td_proc->p_pid, cpu_n)) {
-			// El td es el de la cola global y se continua la ejecución
-			CTR1(KTR_RUNQ, "choosing td_sched %p from main runq", td);
-			resource_fire_net(td, TRANSITION(cpu_n, TRAN_FROM_GLOBAL_CPU), "sched_choose");
-			// (no FSM call)
-			rn_log_transition(td, TRANSITION(cpu_n, TRAN_FROM_GLOBAL_CPU), "sched_choose", NULL);
-		} else //si la cpu no esta disponible para el hilo hago que se ejecute idlethread?
-			td = NULL;
-	}
-
-#else
+	td = NULL;
 	rq = &runq;
-	td = runq_choose(&runq);
-#endif
+	idletd = PCPU_GET(idlethread);
 
-	if (td) {
 #ifdef SMP
-		if (td == tdcpu)
-			runq_length[cpu_n]--;
-#endif
+	{
+		int cpu_n;
+		struct thread *tdcpu;
+
+		cpu_n = PCPU_GET(cpuid);
+
+		/* DISABLED: nadie corre en este CPU (solo idle) */
+		if (is_cpu_disabled(cpu_n)) {
+			td = NULL;
+			goto idle_out_smp;
+		}
+
+		/* Top de la cola per-cpu */
+		tdcpu = runq_choose(&runq_pcpu[cpu_n]);
+
+		/* RESERVED: solo threads bound a ESTE cpu */
+		if (is_cpu_reserved(cpu_n)) {
+			if (tdcpu != NULL) {
+				struct td_sched *tscpu = td_get_sched(tdcpu);
+
+				if (cpu_allowed_for_td(tdcpu, tscpu, cpu_n)) {
+					td = tdcpu;
+					rq = &runq_pcpu[cpu_n];
+
+					resource_fire_net(td, TRANSITION(cpu_n, TRAN_UNQUEUE),
+					    "sched_choose_reserved");
+					rn_log_transition(td, TRANSITION(cpu_n, TRAN_UNQUEUE),
+					    "sched_choose_reserved", NULL);
+				}
+			}
+
+			/* Si no hay runnable permitido en RESERVED -> idle */
+			if (td == NULL)
+				goto idle_out_smp;
+
+			goto out_smp;
+		}
+
+		/* CPU normal: miro global y comparo con per-cpu */
+		td = runq_choose_fuzz(&runq, runq_fuzz);
+		rq = &runq;
+
+		/* Validación defensiva: descartar candidatos no permitidos */
+		if (td != NULL) {
+			struct td_sched *tsg = td_get_sched(td);
+			if (!cpu_allowed_for_td(td, tsg, cpu_n))
+				td = NULL;
+		}
+		if (tdcpu != NULL) {
+			struct td_sched *tscpu = td_get_sched(tdcpu);
+			if (!cpu_allowed_for_td(tdcpu, tscpu, cpu_n))
+				tdcpu = NULL;
+		}
+
+		/* Elegir por prioridad (menor número = mejor) */
+		if (td == NULL ||
+		    (tdcpu != NULL && tdcpu->td_priority < td->td_priority)) {
+			td = tdcpu;
+			rq = &runq_pcpu[cpu_n];
+
+			if (td != NULL) {
+				resource_fire_net(td, TRANSITION(cpu_n, TRAN_UNQUEUE),
+				    "sched_choose_pcpu");
+				rn_log_transition(td, TRANSITION(cpu_n, TRAN_UNQUEUE),
+				    "sched_choose_pcpu", NULL);
+			}
+		} else {
+			/* td viene de global (ya validado) */
+			if (td != NULL) {
+				resource_fire_net(td, TRANSITION(cpu_n, TRAN_FROM_GLOBAL_CPU),
+				    "sched_choose_global");
+				rn_log_transition(td, TRANSITION(cpu_n, TRAN_FROM_GLOBAL_CPU),
+				    "sched_choose_global", NULL);
+			}
+		}
+
+out_smp:
+		if (td != NULL) {
+			if (rq != &runq)
+				runq_length[cpu_n]--;
+
+			runq_remove(rq, td);
+			td->td_flags |= TDF_DIDRUN;
+
+			KASSERT(td->td_flags & TDF_INMEM,
+			    ("sched_choose: thread swapped out"));
+			return (td);
+		}
+
+idle_out_smp:
+		wakeup_if_needed(idletd);
+		resource_fire_net(idletd, TRANSITION(cpu_n, TRAN_EXEC_IDLE),
+		    "sched_choose_idle");
+		idletd->mark = thread_fire[THREAD_RUNQ];
+		return (idletd);
+	}
+#else
+	/* UP */
+	td = runq_choose(&runq);
+	rq = &runq;
+
+	if (td != NULL) {
 		runq_remove(rq, td);
 		td->td_flags |= TDF_DIDRUN;
 
@@ -1711,10 +1757,9 @@ sched_choose(void)
 	}
 
 	wakeup_if_needed(idletd);
-	resource_fire_net(idletd, TRANSITION(cpu_n, TRAN_EXEC_IDLE), "sched_choose_3");
 	idletd->mark = thread_fire[THREAD_RUNQ];
-
 	return (idletd);
+#endif
 }
 
 void
