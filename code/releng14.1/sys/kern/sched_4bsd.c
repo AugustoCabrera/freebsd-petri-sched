@@ -1295,6 +1295,87 @@ kick_other_cpu(int pri, int cpuid)
 }
 #endif /* SMP */
 
+
+
+
+
+
+#ifdef SMP
+static __inline int
+ts_runq_cpu(const struct td_sched *ts)
+{
+	/* Devuelve el cpu índice si ts_runq apunta a runq_pcpu[], si no -1 */
+	if (SKE_RUNQ_PCPU(ts)) {		// MACRO: el ts->ts_runq de este thread apunta a una cola per-CPU (runq_pcpu[i]) o a la cola global (runq)?
+
+	/*
+		Devuelve true si ts->ts_runq no es NULL y no es &runq (la cola global).
+	*/
+
+		return ((int)(ts->ts_runq - &runq_pcpu[0])); 
+	}
+	return (-1);
+}
+
+/*
+ * Política!!!
+ * - DISABLED: nadie corre.
+ * - RESERVED: SOLO threads bound y bound a *ese* cpu.
+ * - además respetá cpuset + tu política cpu_available_for_proc().
+ */
+static __inline int
+cpu_allowed_for_td(struct thread *td, struct td_sched *ts, int cpu)
+{
+	if (cpu < 0 || cpu >= CPU_NUMBER)
+		return (0);
+
+	if (is_cpu_disabled(cpu))
+		return (0);
+
+	if (is_cpu_reserved(cpu)) {
+		if ((td->td_flags & TDF_BOUND) == 0)
+			return (0);
+		if (ts_runq_cpu(ts) != cpu)
+			return (0);
+	}
+
+	if (!THREAD_CAN_SCHED(td, cpu))
+		return (0);
+
+	/* Si esto ya chequea reserved/disabled en otro lado y querés evitar doble lógica, podés sacarlo */
+	if (!cpu_available_for_proc(td->td_proc->p_pid, cpu))
+		return (0);
+
+	return (1);
+}
+#endif
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 #ifdef SMP
 static int
 sched_pickcpu(struct thread *td)
@@ -1305,23 +1386,35 @@ sched_pickcpu(struct thread *td)
 
 	transition = resource_choose_cpu(td);
 
-	if (transition == TRAN_QUEUE_GLOBAL) {
-		/*
-		 * La red de Petri no eligió un CPU concreto (cola global).
-		 * En este contexto necesitamos un CPU específico, así que
-		 * usamos como fallback la CPU actual.
-		 */
-		cpu = PCPU_GET(cpuid);
-	} else {
-		cpu = (int)(transition / CPU_BASE_TRANSITIONS);
+	struct td_sched *ts;
+	int cand;
+	ts = td_get_sched(td);
+	/*
+		te da el “estado/metadata que mantiene el scheduler” para ese hilo (struct td_sched): en 
+		qué runq lo tiene (ts_runq), estimación de CPU (ts_estcpu), slice restante (ts_slice), 
+		flags de afinidad (ts_flags), etc.
+	*/
+
+	cand = (transition == TRAN_QUEUE_GLOBAL) ?
+	    -1 : (int)(transition / CPU_BASE_TRANSITIONS);
+
+	/* 1) si Petri eligió uno válido y permitido, usalo */
+	if (cand >= 0 && cpu_allowed_for_td(td, ts, cand))
+		return (cand);
+
+	/* 2) fallback: probá cpu actual por locality */
+	cpu = PCPU_GET(cpuid);
+	if (cpu_allowed_for_td(td, ts, cpu))
+		return (cpu);
+
+	/* 3) último fallback: cualquier cpu permitido */
+	CPU_FOREACH(cpu) {
+		if (cpu_allowed_for_td(td, ts, cpu))
+			return (cpu);
 	}
 
-	/* El cpu debe ser válido para la red de Petri. */
-	KASSERT(cpu >= 0 && cpu < CPU_NUMBER,
-	    ("sched_pickcpu: cpu=%d fuera de rango Petri (CPU_NUMBER=%d)",
-	     cpu, CPU_NUMBER));
-
-	return (cpu);
+	KASSERT(0, ("sched_pickcpu: no CPU allowed (pid=%d)", td->td_proc->p_pid));
+	return (PCPU_GET(cpuid));
 }
 #endif
 
