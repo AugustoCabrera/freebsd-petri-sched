@@ -1493,37 +1493,46 @@ if (smp_started && (td->td_pinned != 0 || (td->td_flags & TDF_BOUND) ||
     int enqueue_tr = TRAN_ADDTOQUEUE;
 
     if (td->td_pinned != 0) {
-        cpu = td->td_lastcpu;
+    cpu = td->td_lastcpu;
 
-        /* opcional: si también querés honor bound enqueue en pinned, lo podés poner acá */
-        enqueue_tr = TRAN_ADDTOQUEUE;
+	KASSERT(cpu != NOCPU, ("sched_add: pinned con lastcpu=NOCPU (pid=%d)", td->td_proc->p_pid));
+	
+    /* pinned no puede violar tu política: si no es permitido, es bug de estado */
+    KASSERT(cpu_allowed_for_td(td, ts, cpu),
+        ("sched_add: pinned en cpu no permitido (cpu=%u pid=%d bound=%d)",
+         cpu, td->td_proc->p_pid, !!(td->td_flags & TDF_BOUND)));
 
-    } else if ((td->td_flags & TDF_BOUND) && boundcpu >= 0) {
+    /* si está RESERVED, solo va a pasar si además es BOUND -> usar ADDBOU */
+    enqueue_tr = is_cpu_reserved(cpu) ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
+
+	KASSERT(transition_is_sensitized(TRANSITION(cpu, enqueue_tr)),
+        ("sched_add: enqueue no sensitized for pinned (cpu=%u tr=%d)",
+         cpu, enqueue_tr));
+
+} else if ((td->td_flags & TDF_BOUND)) {
+
+		KASSERT(boundcpu >= 0,
+        ("sched_add: BOUND td sin runq_pcpu (ts_runq=%p)", ts->ts_runq));
+		
         /* Thread bound: el CPU “target” es el de su runq per-cpu */
-        cpu = (u_int)boundcpu;
+         cpu = (u_int)boundcpu;
 
-        /*
-         * REGLA NUEVA:
-         * si hay token en RESERVED de ese core, intentá ADDTOQUEUE_BOUND.
-         * Si no, hacé lo de siempre.
-         */
-        if (is_cpu_reserved(cpu) &&
-            transition_is_sensitized(TRANSITION(cpu, TRAN_ADDTOQUEUE_BOUND))) {
-            enqueue_tr = TRAN_ADDTOQUEUE_BOUND;
-        } else if (!transition_is_sensitized(TRANSITION(cpu, TRAN_ADDTOQUEUE))) {
-            /*
-             * “como ya está”: si no se puede encolar al boundcpu,
-             * elegí otro CPU válido para el cpuset.
-             */
-            cpu = sched_pickcpu(td);
-            enqueue_tr = TRAN_ADDTOQUEUE;
-        }
+		/*
+		* REGLA:
+		* - Si el CPU tiene token en RESERVED -> usar transición ADDBOU
+		* - Si no -> usar ADDTOQUEUE normal
+		*/
+		enqueue_tr = is_cpu_reserved(cpu) ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
 
-    } else {
-        /* Afinidad (no bound): elegí CPU normal */
-        cpu = sched_pickcpu(td);
-        enqueue_tr = TRAN_ADDTOQUEUE;
-    }
+		/* En BOUND no hay fallback: si no está sensitized, es inconsistencia del net/estado */
+		KASSERT(transition_is_sensitized(TRANSITION(cpu, enqueue_tr)),
+			("sched_add: enqueue no sensitized for BOUND (cpu=%u tr=%d)", cpu, enqueue_tr));
+
+	} else {
+		/* Afinidad (no bound): elegí CPU normal (cpu_allowed_for_td filtra RESERVED) */
+		cpu = sched_pickcpu(td);
+		enqueue_tr = TRAN_ADDTOQUEUE;
+	}
 
     ts->ts_runq = &runq_pcpu[cpu];
     single_cpu = 1;
