@@ -345,7 +345,7 @@ mi_startup(void)
 	 * Now hand over this thread to swapper.
 	 */
 	for (int i = 0; i < 6; i++) {
-		printf("SACAMOS!: sched_pickcpu: no valid CPUs \n");
+		printf("CORES RESERVADOS!!!!!!!!\n");
 	}
 
 

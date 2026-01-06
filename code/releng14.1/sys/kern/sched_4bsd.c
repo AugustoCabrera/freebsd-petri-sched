@@ -1362,7 +1362,7 @@ cpu_allowed_for_td(struct thread *td, struct td_sched *ts, int cpu)
 
     return (1);
 }
-
+#endif /* SMP */
 
 
 
@@ -1496,7 +1496,7 @@ if (smp_started && (td->td_pinned != 0 || (td->td_flags & TDF_BOUND) ||
     cpu = td->td_lastcpu;
 
 	KASSERT(cpu != NOCPU, ("sched_add: pinned con lastcpu=NOCPU (pid=%d)", td->td_proc->p_pid));
-	
+
     /* pinned no puede violar tu política: si no es permitido, es bug de estado */
     KASSERT(cpu_allowed_for_td(td, ts, cpu),
         ("sched_add: pinned en cpu no permitido (cpu=%u pid=%d bound=%d)",
