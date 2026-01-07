@@ -1369,13 +1369,18 @@ sched_add(struct thread *td, int flags)
 
 	/*
 	 * SAFE boundcpu: only meaningful if ts_runq is a per-cpu runq.
-	 * Prevents: panic "bound td_sched not on cpu runq".
+	 * Early boot: ts->ts_runq can be unset/temporary -> normalize to global.
 	 */
 	int boundcpu = -1;
 	if (SKE_RUNQ_PCPU(ts)) {
 		boundcpu = (int)(ts->ts_runq - &runq_pcpu[0]);
-		if (boundcpu < 0 || boundcpu >= (int)mp_ncpus)
-			boundcpu = -1;
+		/* If it's per-cpu, it MUST be within range. */
+		KASSERT(boundcpu >= 0 && boundcpu < (int)mp_ncpus,
+		    ("sched_add: ts_runq per-cpu but out of range: %d", boundcpu));
+	} else {
+		/* Don't panic in early boot: force global if unexpected. */
+		if (ts->ts_runq != &runq)
+			ts->ts_runq = &runq;
 	}
 
 	if (smp_started && (td->td_pinned != 0 || (td->td_flags & TDF_BOUND) ||
@@ -1384,15 +1389,29 @@ sched_add(struct thread *td, int flags)
 		/* 1) pick initial candidate cpu */
 		if (td->td_pinned != 0) {
 			cpu = td->td_lastcpu;
-		} else if ((td->td_flags & TDF_BOUND) != 0 &&
-		    boundcpu != -1 &&
-		    transition_is_sensitized(TRANSITION(boundcpu, TRAN_ADDTOQUEUE))) {
-			/* Find CPU from bound runq. */
-			cpu = (u_int)boundcpu;
+			/* If pinned, lastcpu must be valid when used. */
+			KASSERT(cpu < mp_ncpus,
+			    ("sched_add: pinned thread lastcpu out of range: %u", cpu));
+		} else if ((td->td_flags & TDF_BOUND) != 0) {
+			/*
+			 * Bound: prefer boundcpu only if we actually have one AND
+			 * the net allows enqueue there. Otherwise pick another CPU.
+			 * (No panic here: early boot/transient states can exist.)
+			 */
+			if (boundcpu != -1 &&
+			    transition_is_sensitized(TRANSITION(boundcpu, TRAN_ADDTOQUEUE))) {
+				cpu = (u_int)boundcpu;
+			} else {
+				cpu = sched_pickcpu(td);
+			}
 		} else {
 			/* Find a valid CPU for our cpuset */
 			cpu = sched_pickcpu(td);
 		}
+
+		/* Candidate cpu must always be in range before TRANSITION(). */
+		KASSERT(cpu < mp_ncpus,
+		    ("sched_add: selected cpu out of range: %u", cpu));
 
 		/*
 		 * 2) HARD RULE: don't enqueue new threads on a CPU that cannot
@@ -1403,6 +1422,9 @@ sched_add(struct thread *td, int flags)
 			u_int altcpu;
 
 			altcpu = sched_pickcpu(td);
+			KASSERT(altcpu < mp_ncpus,
+			    ("sched_add: altcpu out of range: %u", altcpu));
+
 			if (altcpu != cpu &&
 			    transition_is_sensitized(TRANSITION(altcpu, TRAN_ADDTOQUEUE))) {
 				cpu = altcpu;
@@ -1414,14 +1436,27 @@ sched_add(struct thread *td, int flags)
 				cpu = NOCPU;
 				ts->ts_runq = &runq;
 				single_cpu = 0;
+
+				/* Must be global on fallback. */
+				KASSERT(ts->ts_runq == &runq,
+				    ("sched_add: fallback expected global runq"));
+
 				resource_fire_net(td, TRAN_QUEUE_GLOBAL, "sched_add(fallback)");
 				goto queued;
 			}
 		}
 
 		/* 3) commit to per-cpu runq only after net validation */
+		KASSERT(transition_is_sensitized(TRANSITION(cpu, TRAN_ADDTOQUEUE)),
+		    ("sched_add: committing to disabled cpu%u (ADDTOQUEUE not sensitized)", cpu));
+
 		ts->ts_runq = &runq_pcpu[cpu];
 		single_cpu = 1;
+
+		/* Sanity: per-cpu runq pointer must match cpu. */
+		KASSERT(ts->ts_runq == &runq_pcpu[cpu],
+		    ("sched_add: ts_runq mismatch for cpu%u", cpu));
+
 		CTR3(KTR_RUNQ,
 		    "sched_add: Put td_sched:%p(td:%p) on cpu%d runq", ts, td,
 		    cpu);
@@ -1435,11 +1470,35 @@ sched_add(struct thread *td, int flags)
 		    td);
 		cpu = NOCPU;
 		ts->ts_runq = &runq;
+		single_cpu = 0;
+
+		KASSERT(ts->ts_runq == &runq,
+		    ("sched_add: expected global runq"));
+
 		resource_fire_net(td, TRAN_QUEUE_GLOBAL, "sched_add");
 		// (no FSM call)
 	}
 
 queued:
+	/*
+	 * Final invariants before enqueue:
+	 * - If cpu == NOCPU -> must be global runq.
+	 * - If cpu != NOCPU -> must be per-cpu runq and net must allow addtoqueue.
+	 */
+	if (cpu == NOCPU) {
+		KASSERT(ts->ts_runq == &runq,
+		    ("sched_add: cpu==NOCPU but ts_runq not global"));
+		KASSERT(single_cpu == 0,
+		    ("sched_add: cpu==NOCPU but single_cpu set"));
+	} else {
+		KASSERT(cpu < mp_ncpus,
+		    ("sched_add: cpu out of range at enqueue: %u", cpu));
+		KASSERT(ts->ts_runq == &runq_pcpu[cpu],
+		    ("sched_add: cpu%u but ts_runq not runq_pcpu[cpu]", cpu));
+		KASSERT(transition_is_sensitized(TRANSITION(cpu, TRAN_ADDTOQUEUE)),
+		    ("sched_add: enqueue to disabled cpu%u (post-check)", cpu));
+	}
+
 	if ((td->td_flags & TDF_NOLOAD) == 0)
 		sched_load_add();
 	runq_add(ts->ts_runq, td, flags);
