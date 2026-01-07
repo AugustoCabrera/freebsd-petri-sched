@@ -1349,7 +1349,7 @@ sched_add(struct thread *td, int flags)
 	    sched_tdname(curthread));
 	KTR_POINT1(KTR_SCHED, "thread", sched_tdname(curthread), "wokeup",
 	    KTR_ATTR_LINKED, sched_tdname(td));
-	SDT_PROBE4(sched, , , enqueue, td, td->td_proc, NULL, 
+	SDT_PROBE4(sched, , , enqueue, td, td->td_proc, NULL,
 	    flags & SRQ_PREEMPTED);
 
 	/*
@@ -1368,45 +1368,135 @@ sched_add(struct thread *td, int flags)
 	wakeup_if_needed(td);
 
 	/*
-	 * If SMP is started and the thread is pinned or otherwise limited to
-	 * a specific set of CPUs, queue the thread to a per-CPU run queue.
-	 * Otherwise, queue the thread to the global run queue.
-	 *
-	 * If SMP has not yet been started we must use the global run queue
-	 * as per-CPU state may not be initialized yet and we may crash if we
-	 * try to access the per-CPU run queues.
+	 * SAFE boundcpu: only meaningful if ts_runq is a per-cpu runq.
+	 * Early boot: ts->ts_runq can be unset/temporary -> normalize to global.
 	 */
-	int boundcpu = ts->ts_runq - &runq_pcpu[0];
-	if (smp_started && (td->td_pinned != 0 || td->td_flags & TDF_BOUND ||
-	    ts->ts_flags & TSF_AFFINITY)) {
-		if (td->td_pinned != 0) 
+	int boundcpu = -1;
+	if (SKE_RUNQ_PCPU(ts)) {
+		boundcpu = (int)(ts->ts_runq - &runq_pcpu[0]);
+		/* If it's per-cpu, it MUST be within range. */
+		KASSERT(boundcpu >= 0 && boundcpu < (int)mp_ncpus,
+		    ("sched_add: ts_runq per-cpu but out of range: %d", boundcpu));
+	} else {
+		/* Don't panic in early boot: force global if unexpected. */
+		if (ts->ts_runq != &runq)
+			ts->ts_runq = &runq;
+	}
+
+	if (smp_started && (td->td_pinned != 0 || (td->td_flags & TDF_BOUND) ||
+	    (ts->ts_flags & TSF_AFFINITY))) {
+
+		/* 1) pick initial candidate cpu */
+		if (td->td_pinned != 0) {
 			cpu = td->td_lastcpu;
-		else if (td->td_flags & TDF_BOUND && 
-				transition_is_sensitized(TRANSITION(boundcpu, TRAN_ADDTOQUEUE))) {
-			/* Find CPU from bound runq. */
-			KASSERT(SKE_RUNQ_PCPU(ts),
-			    ("sched_add: bound td_sched not on cpu runq"));
-			cpu = boundcpu;
-		} else
+			/* If pinned, lastcpu must be valid when used. */
+			KASSERT(cpu < mp_ncpus,
+			    ("sched_add: pinned thread lastcpu out of range: %u", cpu));
+		} else if ((td->td_flags & TDF_BOUND) != 0) {
+			/*
+			 * Bound: prefer boundcpu only if we actually have one AND
+			 * the net allows enqueue there. Otherwise pick another CPU.
+			 * (No panic here: early boot/transient states can exist.)
+			 */
+			if (boundcpu != -1 &&
+			    transition_is_sensitized(TRANSITION(boundcpu, TRAN_ADDTOQUEUE))) {
+				cpu = (u_int)boundcpu;
+			} else {
+				cpu = sched_pickcpu(td);
+			}
+		} else {
 			/* Find a valid CPU for our cpuset */
 			cpu = sched_pickcpu(td);
+		}
+
+		/* Candidate cpu must always be in range before TRANSITION(). */
+		KASSERT(cpu < mp_ncpus,
+		    ("sched_add: selected cpu out of range: %u", cpu));
+
+		/*
+		 * 2) HARD RULE: don't enqueue new threads on a CPU that cannot
+		 * accept ADDTOQUEUE (DISABLE/SUSPENDED/inhibited).
+		 * Pick another cpu; if none, fallback to global.
+		 */
+		if (!transition_is_sensitized(TRANSITION(cpu, TRAN_ADDTOQUEUE))) {
+			u_int altcpu;
+
+			altcpu = sched_pickcpu(td);
+			KASSERT(altcpu < mp_ncpus,
+			    ("sched_add: altcpu out of range: %u", altcpu));
+
+			if (altcpu != cpu &&
+			    transition_is_sensitized(TRANSITION(altcpu, TRAN_ADDTOQUEUE))) {
+				cpu = altcpu;
+			} else {
+				/* No per-cpu target available -> global runq */
+				CTR2(KTR_RUNQ,
+				    "sched_add: adding td_sched:%p (td:%p) to gbl runq (fallback)",
+				    ts, td);
+				cpu = NOCPU;
+				ts->ts_runq = &runq;
+				single_cpu = 0;
+
+				/* Must be global on fallback. */
+				KASSERT(ts->ts_runq == &runq,
+				    ("sched_add: fallback expected global runq"));
+
+				resource_fire_net(td, TRAN_QUEUE_GLOBAL, "sched_add(fallback)");
+				goto queued;
+			}
+		}
+
+		/* 3) commit to per-cpu runq only after net validation */
+		KASSERT(transition_is_sensitized(TRANSITION(cpu, TRAN_ADDTOQUEUE)),
+		    ("sched_add: committing to disabled cpu%u (ADDTOQUEUE not sensitized)", cpu));
 
 		ts->ts_runq = &runq_pcpu[cpu];
 		single_cpu = 1;
+
+		/* Sanity: per-cpu runq pointer must match cpu. */
+		KASSERT(ts->ts_runq == &runq_pcpu[cpu],
+		    ("sched_add: ts_runq mismatch for cpu%u", cpu));
+
 		CTR3(KTR_RUNQ,
 		    "sched_add: Put td_sched:%p(td:%p) on cpu%d runq", ts, td,
 		    cpu);
 
 		resource_fire_net(td, TRANSITION(cpu, TRAN_ADDTOQUEUE), "sched_add");
 		td->mark = thread_fire[THREAD_RUNQ];
+
 	} else {
 		CTR2(KTR_RUNQ,
 		    "sched_add: adding td_sched:%p (td:%p) to gbl runq", ts,
 		    td);
 		cpu = NOCPU;
 		ts->ts_runq = &runq;
+		single_cpu = 0;
+
+		KASSERT(ts->ts_runq == &runq,
+		    ("sched_add: expected global runq"));
+
 		resource_fire_net(td, TRAN_QUEUE_GLOBAL, "sched_add");
 		// (no FSM call)
+	}
+
+queued:
+	/*
+	 * Final invariants before enqueue:
+	 * - If cpu == NOCPU -> must be global runq.
+	 * - If cpu != NOCPU -> must be per-cpu runq and net must allow addtoqueue.
+	 */
+	if (cpu == NOCPU) {
+		KASSERT(ts->ts_runq == &runq,
+		    ("sched_add: cpu==NOCPU but ts_runq not global"));
+		KASSERT(single_cpu == 0,
+		    ("sched_add: cpu==NOCPU but single_cpu set"));
+	} else {
+		KASSERT(cpu < mp_ncpus,
+		    ("sched_add: cpu out of range at enqueue: %u", cpu));
+		KASSERT(ts->ts_runq == &runq_pcpu[cpu],
+		    ("sched_add: cpu%u but ts_runq not runq_pcpu[cpu]", cpu));
+		KASSERT(transition_is_sensitized(TRANSITION(cpu, TRAN_ADDTOQUEUE)),
+		    ("sched_add: enqueue to disabled cpu%u (post-check)", cpu));
 	}
 
 	if ((td->td_flags & TDF_NOLOAD) == 0)
@@ -1537,7 +1627,7 @@ sched_choose(void)
 	td = runq_choose_fuzz(&runq, runq_fuzz); // Selecciona un thread de la cola global
 	tdcpu = runq_choose(&runq_pcpu[cpu_n]); // Selecciona un thread de la cola de la CPU que está corriendo
 
-	if (is_cpu_suspended(cpu_n) || 
+	if (is_cpu_disabled(cpu_n) || 
 		td == NULL ||
 	    (tdcpu != NULL &&
 	     tdcpu->td_priority < td->td_priority)) {
@@ -1558,7 +1648,7 @@ sched_choose(void)
 			rn_log_transition(td, TRANSITION(cpu_n, TRAN_UNQUEUE), "sched_choose", NULL);
 		} //active thread available
 		
-		else if (is_cpu_suspended(cpu_n)) { //CPU suspended -> no active thread 
+		else if (is_cpu_disabled(cpu_n)) { //CPU suspended -> no active thread 
 			wakeup_if_needed(idletd);
 			resource_fire_net(idletd, TRANSITION(cpu_n, TRAN_EXEC_IDLE), "sched_choose_4");
 			idletd->mark = thread_fire[THREAD_RUNQ];

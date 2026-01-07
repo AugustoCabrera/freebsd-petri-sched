@@ -218,9 +218,9 @@ is_inhibited(int places_index, int transition_index)
 // }
 
 bool 
-is_cpu_suspended(int cpu_n)
+is_cpu_disabled(int cpu_n)
 {
-	return resource_net->mark[PLACE(cpu_n, PLACE_SUSPENDED)] > 0;
+	return resource_net->mark[PLACE(cpu_n, PLACE_DISABLE)] > 0;
 }
 
 /**
@@ -362,7 +362,7 @@ toggle_active_cpu(int cpu, bool turn_off)
 		return false;
 	}
 
-	const int base_tr = turn_off ? TRAN_SUSPEND_PROC : TRAN_WAKEUP_PROC;
+	const int base_tr = turn_off ? TRAN_DISABLE : TRAN_ENABLE;
     const int tr = TRANSITION(cpu, base_tr);
     const char *action = turn_off ? "turned off" : "turned on";
 
@@ -406,7 +406,7 @@ toggle_pin_cpu_to_proc(int proc_id, int cpu, bool release)
 		return true;
 	}
 
-	if (!cpu_available_for_proc(proc_id, cpu) || is_cpu_suspended(cpu) || (proc_id < 1))
+	if (!cpu_available_for_proc(proc_id, cpu) || is_cpu_disabled(cpu) || (proc_id < 1))
 		return false;
 		
 	monopolized_cpus_per_proc[cpu] = proc_id; //monopolize
