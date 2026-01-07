@@ -26,82 +26,53 @@ struct petri_cpu_resource_net *resource_net;
 int *monopolized_cpus_per_proc = NULL;
 
 const int base_resource_matrix[CPU_BASE_PLACES][CPU_BASE_TRANSITIONS] = {
-    // AD  EX  EXID  FRGL  REMQ  RETIN  RETV  RESERV  UNQ  UNRES  DISABLE  ENABLE  ADDBOU  FRGLBOU
-    {  0,  0,  -1,   -1,    0,     1,     1,     0,   -1,    0,      0,      0,      0,     -1 }, // CPU
-    {  0,  1,   0,    0,    0,    -1,    -1,     0,    0,    0,      0,      0,      0,      0 }, // EXEC
-    {  1,  0,   0,    0,   -1,     0,     0,     0,   -1,    0,      0,      0,      1,      0 }, // Q
-    {  0,  0,   0,    0,    0,     0,     0,     1,    0,   -1,      0,      0,      0,      0 }, // RESERVED
-    {  0, -1,   1,    1,    0,     0,     0,     0,    1,    0,      0,      0,      0,      1 }, // TOEX
-    {  0,  0,   0,    0,    0,     0,     0,     0,    0,    0,      1,     -1,      0,      0 }  // DISABLED
+	/*Base matrix */
+//AD EX EXID FRGL REMQ RETIN RETV SUS UNQ WUP	
+	{ 0, 0,-1,-1, 0, 1, 1, 0,-1, 0 },//CPU
+	{ 0, 1, 0, 0, 0,-1,-1, 0, 0, 0 },//EXEC
+	{ 1, 0, 0, 0,-1, 0, 0, 0,-1, 0 },//Q
+	{ 0, 0, 0, 0, 0, 0, 0, 1, 0,-1 },//SUSD
+	{ 0,-1, 1, 1, 0, 0, 0, 0, 1, 0 }//TOEX
 };
-
 
 const int base_resource_inhibition_matrix[CPU_BASE_PLACES][CPU_BASE_TRANSITIONS] = {
-    // AD  EX  EXID  FRGL  REMQ  RETIN  RETV  RESERV  UNQ  UNRES  DISABLE  ENABLE  ADDBOU  FRGLBOU
-    {  0,  0,   0,    0,    0,     0,     0,     0,    0,    0,      0,      0,      0,      0 }, // CPU
-    {  0,  0,   0,    0,    0,     0,     0,     0,    0,    0,      0,      0,      0,      0 }, // EXEC
-    {  0,  0,   1,    0,    0,     0,     0,     0,    0,    0,      0,      0,      0,      0 }, // Q
-    {  1,  0,   0,    1,    0,     0,     0,     0,    0,    0,      1,      0,      0,      0 }, // RESERVED
-    {  0,  0,   0,    0,    0,     0,     0,     0,    0,    0,      0,      0,      0,      0 }, // TOEX
-    {  1,  0,   0,    1,    0,     0,     0,     1,    0,    0,      0,      0,      1,      1 }  // DISABLED
+	/*Base inhibition matrix */
+	{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+	{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+	{ 0, 0, 1, 0, 0, 0, 0, 0, 0, 0 },
+	{ 1, 0, 0, 1, 0, 0, 0, 0, 0, 0 },
+	{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 };
 
+int hierarchical_transitions[HIERARCHICAL_TRANSITIONS] = {
+	TRAN_ADDTOQUEUE,
+	TRAN_EXEC,
+	TRAN_EXEC_IDLE,
+	TRAN_RETURN_INVOL,
+	TRAN_RETURN_VOL,
+	TRAN_REMOVE_QUEUE
+};
 
-// int hierarchical_transitions[HIERARCHICAL_TRANSITIONS] = {
-// 	TRAN_ADDTOQUEUE,
-// 	TRAN_EXEC,
-// 	TRAN_EXEC_IDLE,
-// 	TRAN_RETURN_INVOL,
-// 	TRAN_RETURN_VOL,
-// 	TRAN_REMOVE_QUEUE
-// };
-
-// const int hierarchical_corresponse[HIERARCHICAL_TRANSITIONS] = { 
-// 	TRAN_ON_QUEUE, 
-// 	TRAN_SET_RUNNING, 
-// 	TRAN_ON_QUEUE, 
-// 	TRAN_SWITCH_OUT, 
-// 	TRAN_TO_WAIT_CHANNEL, 
-// 	TRAN_REMOVE, 	
-// 	TRAN_ON_QUEUE, 	
-// 	TRAN_REMOVE 
-// };
+const int hierarchical_corresponse[HIERARCHICAL_TRANSITIONS] = { 
+	TRAN_ON_QUEUE, 
+	TRAN_SET_RUNNING, 
+	TRAN_ON_QUEUE, 
+	TRAN_SWITCH_OUT, 
+	TRAN_TO_WAIT_CHANNEL, 
+	TRAN_REMOVE, 	
+	TRAN_ON_QUEUE, 	
+	TRAN_REMOVE 
+};
 
 const char *transitions_names[] = {
-    /* P0 */
-    "ADDTOQUEUE_P0", "EXEC_P0", "EXEC_IDLE_P0", "FROM_GLOBAL_CPU_P0",
-    "REMOVE_QUEUE_P0", "RETURN_INVOL_P0", "RETURN_VOL_P0",
-    "CPU_RESERVE_P0", "UNQUEUE_P0", "CPU_UNRESERVE_P0",
-    "CPU_DISABLE_P0", "CPU_ENABLE_P0",
-    "ADDTOQUEUE_BOUND_P0", "FROM_GLOBAL_BOUND_CPU_P0",
-
-    /* P1 */
-    "ADDTOQUEUE_P1", "EXEC_P1", "EXEC_IDLE_P1", "FROM_GLOBAL_CPU_P1",
-    "REMOVE_QUEUE_P1", "RETURN_INVOL_P1", "RETURN_VOL_P1",
-    "CPU_RESERVE_P1", "UNQUEUE_P1", "CPU_UNRESERVE_P1",
-    "CPU_DISABLE_P1", "CPU_ENABLE_P1",
-    "ADDTOQUEUE_BOUND_P1", "FROM_GLOBAL_BOUND_CPU_P1",
-
-    /* P2 */
-    "ADDTOQUEUE_P2", "EXEC_P2", "EXEC_IDLE_P2", "FROM_GLOBAL_CPU_P2",
-    "REMOVE_QUEUE_P2", "RETURN_INVOL_P2", "RETURN_VOL_P2",
-    "CPU_RESERVE_P2", "UNQUEUE_P2", "CPU_UNRESERVE_P2",
-    "CPU_DISABLE_P2", "CPU_ENABLE_P2",
-    "ADDTOQUEUE_BOUND_P2", "FROM_GLOBAL_BOUND_CPU_P2",
-
-    /* P3 */
-    "ADDTOQUEUE_P3", "EXEC_P3", "EXEC_IDLE_P3", "FROM_GLOBAL_CPU_P3",
-    "REMOVE_QUEUE_P3", "RETURN_INVOL_P3", "RETURN_VOL_P3",
-    "CPU_RESERVE_P3", "UNQUEUE_P3", "CPU_UNRESERVE_P3",
-    "CPU_DISABLE_P3", "CPU_ENABLE_P3",
-    "ADDTOQUEUE_BOUND_P3", "FROM_GLOBAL_BOUND_CPU_P3",
-
-    /* Global */
-    "REMOVE_GLOBAL_QUEUE", "START_SMP", "QUEUE_GLOBAL"
+	"ADDTOQUEUE_P0", "EXEC_P0", "EXEC_IDLE_P0", "FROM_GLOBAL_CPU_P0", "REMOVE_QUEUE_P0", "RETURN_INVOL_P0", "RETURN_VOL_P0", "SUSPEND_PROC_P0", "UNQUEUE_P0", "WAKEUP_PROC_P0",
+	"ADDTOQUEUE_P1", "EXEC_P1", "EXEC_IDLE_P1", "FROM_GLOBAL_CPU_P1", "REMOVE_QUEUE_P1", "RETURN_INVOL_P1", "RETURN_VOL_P1", "SUSPEND_PROC_P1", "UNQUEUE_P1", "WAKEUP_PROC_P1",
+	"ADDTOQUEUE_P2", "EXEC_P2", "EXEC_IDLE_P2", "FROM_GLOBAL_CPU_P2", "REMOVE_QUEUE_P2", "RETURN_INVOL_P2", "RETURN_VOL_P2", "SUSPEND_PROC_P2", "UNQUEUE_P2", "WAKEUP_PROC_P2",
+	"ADDTOQUEUE_P3", "EXEC_P3", "EXEC_IDLE_P3", "FROM_GLOBAL_CPU_P3", "REMOVE_QUEUE_P3", "RETURN_INVOL_P3", "RETURN_VOL_P3", "SUSPEND_PROC_P3", "UNQUEUE_P3", "WAKEUP_PROC_P3",
+	"REMOVE_GLOBAL_QUEUE", "START_SMP", "QUEUE_GLOBAL"
 };
 
-
-const char *cpu_places_names[] = { "CPU", "EXECUTING", "QUEUE", "RESERVED", "TOEXEC", "DISABLED" };
+const char *cpu_places_names[] = { "CPU", "EXECUTING", "QUEUE", "SUSPENDED", "TOEXEC" };
 
 static void resource_fire_single_transition(struct thread *pt, int transition_index);
 int get_monopolized_cpu_by_proc_id(int proc_id);
@@ -149,8 +120,8 @@ init_global_resources(void)
 {
 
 	//add global hierarchical transitions
-	// hierarchical_transitions[PER_CPU_HIER_TRANSITIONS] = TRAN_QUEUE_GLOBAL;
-	// hierarchical_transitions[PER_CPU_HIER_TRANSITIONS + 1] = TRAN_REMOVE_GLOBAL_QUEUE;
+	hierarchical_transitions[PER_CPU_HIER_TRANSITIONS] = TRAN_QUEUE_GLOBAL;
+	hierarchical_transitions[PER_CPU_HIER_TRANSITIONS + 1] = TRAN_REMOVE_GLOBAL_QUEUE;
 
 	//Transition to remove from global queue
 	resource_net->incidence_matrix[PLACE_GLOBAL_QUEUE][TRAN_REMOVE_GLOBAL_QUEUE] = -1;
@@ -173,35 +144,25 @@ init_global_resources(void)
 void
 init_cpu_matrix(int cpu_n)
 {
-    /* 1) Copia la subred base (por-CPU) dentro de la red global */
-    for (int num_place = 0; num_place < CPU_BASE_PLACES; num_place++) {
-        for (int num_transition = 0; num_transition < CPU_BASE_TRANSITIONS; num_transition++) {
-            resource_net->incidence_matrix[PLACE(cpu_n, num_place)][TRANSITION(cpu_n, num_transition)] =
-                base_resource_matrix[num_place][num_transition];
 
-            resource_net->inhibition_matrix[PLACE(cpu_n, num_place)][TRANSITION(cpu_n, num_transition)] =
-                base_resource_inhibition_matrix[num_place][num_transition];
-        }
-    }
+	for (int num_place = 0; num_place < CPU_BASE_PLACES; num_place++) {
+		for (int num_transition = 0; num_transition < CPU_BASE_TRANSITIONS; num_transition++) {
+ 			resource_net->incidence_matrix[PLACE(cpu_n, num_place)][TRANSITION(cpu_n, num_transition)] = base_resource_matrix[num_place][num_transition];
+			resource_net->inhibition_matrix[PLACE(cpu_n, num_place)][TRANSITION(cpu_n, num_transition)] = base_resource_inhibition_matrix[num_place][num_transition];
+		}
+	}
 
-    /* 2) Conectar cola global con ambos dispatch: normal y bound */
-    resource_net->incidence_matrix[PLACE_GLOBAL_QUEUE][TRANSITION(cpu_n, TRAN_FROM_GLOBAL_CPU)] = -1;
-    resource_net->incidence_matrix[PLACE_GLOBAL_QUEUE][TRANSITION(cpu_n, TRAN_FROM_GLOBAL_BOUND_CPU)] = -1;
+	//incidence between each cpu and global resources
+	resource_net->incidence_matrix[PLACE_GLOBAL_QUEUE][TRANSITION(cpu_n, TRAN_FROM_GLOBAL_CPU)] = -1;
 
-    /* 3) Mientras SMP no está listo:
-     *    - CPUs != 0 no pueden ejecutar ni despachar desde global (normal/bound)
-     */
-    if (cpu_n != 0) {
-        resource_net->inhibition_matrix[PLACE_SMP_NOT_READY][TRANSITION(cpu_n, TRAN_FROM_GLOBAL_CPU)] = 1;
-        resource_net->inhibition_matrix[PLACE_SMP_NOT_READY][TRANSITION(cpu_n, TRAN_FROM_GLOBAL_BOUND_CPU)] = 1;
-        resource_net->inhibition_matrix[PLACE_SMP_NOT_READY][TRANSITION(cpu_n, TRAN_EXEC)] = 1;
-    }
+	if (cpu_n != 0) { //inhibit executing to cpus other than 0 because smp hasnt started
+		resource_net->inhibition_matrix[PLACE_SMP_NOT_READY][TRANSITION(cpu_n, TRAN_FROM_GLOBAL_CPU)] = 1;
+		resource_net->inhibition_matrix[PLACE_SMP_NOT_READY][TRANSITION(cpu_n, TRAN_EXEC)] = 1;
+	}
 
-    /* 4) Mientras SMP no está listo: nadie puede encolar (normal ni bound) */
-    resource_net->inhibition_matrix[PLACE_SMP_NOT_READY][TRANSITION(cpu_n, TRAN_ADDTOQUEUE)] = 1;
-    resource_net->inhibition_matrix[PLACE_SMP_NOT_READY][TRANSITION(cpu_n, TRAN_ADDTOQUEUE_BOUND)] = 1;
+	//inhibit smp execution when not ready
+	resource_net->inhibition_matrix[PLACE_SMP_NOT_READY][TRANSITION(cpu_n, TRAN_ADDTOQUEUE)] = 1;
 }
-
 
 void
 init_cpu_mark(int cpu_n)
@@ -256,20 +217,11 @@ is_inhibited(int places_index, int transition_index)
 // 	return 0;
 // }
 
-bool
-is_cpu_disabled(int cpu_n)
+bool 
+is_cpu_suspended(int cpu_n)
 {
-    return resource_net->mark[PLACE(cpu_n, PLACE_DISABLED)] > 0;
+	return resource_net->mark[PLACE(cpu_n, PLACE_SUSPENDED)] > 0;
 }
-
-bool
-is_cpu_reserved(int cpu_n)
-{
-    return resource_net->mark[PLACE(cpu_n, PLACE_RESERVED)] > 0;
-}
-
-
-
 
 /**
  * fire the transition passed as param to the function
@@ -410,7 +362,7 @@ toggle_active_cpu(int cpu, bool turn_off)
 		return false;
 	}
 
-	const int base_tr = turn_off ? TRAN_CPU_DISABLE : TRAN_CPU_ENABLE;
+	const int base_tr = turn_off ? TRAN_SUSPEND_PROC : TRAN_WAKEUP_PROC;
     const int tr = TRANSITION(cpu, base_tr);
     const char *action = turn_off ? "turned off" : "turned on";
 
@@ -454,7 +406,7 @@ toggle_pin_cpu_to_proc(int proc_id, int cpu, bool release)
 		return true;
 	}
 
-	if (!cpu_available_for_proc(proc_id, cpu) || is_cpu_disabled(cpu) || (proc_id < 1))
+	if (!cpu_available_for_proc(proc_id, cpu) || is_cpu_suspended(cpu) || (proc_id < 1))
 		return false;
 		
 	monopolized_cpus_per_proc[cpu] = proc_id; //monopolize

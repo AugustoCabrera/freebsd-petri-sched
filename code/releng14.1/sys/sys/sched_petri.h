@@ -17,8 +17,8 @@
 #define PLACE(cpu, place)            (CPU_BASE_PLACE(cpu) + (place))
 
 /* Definition of constants of the resource petri net */
-#define CPU_BASE_PLACES 		6
-#define CPU_BASE_TRANSITIONS	14
+#define CPU_BASE_PLACES 		5
+#define CPU_BASE_TRANSITIONS	10
 extern int CPU_NUMBER; //will be defined at runtime with mp_ncpus			
 extern int CPU_NUMBER_PLACES; 		
 extern int CPU_NUMBER_TRANSITIONS; 	
@@ -27,16 +27,14 @@ extern int PER_CPU_LAST_TRANSITION;
 /* constants for handling hierarchical transitions */
 #define PER_CPU_HIER_TRANSITIONS 	6
 #define GLOBAL_HIER_TRANSITIONS 	2
-// #define HIERARCHICAL_TRANSITIONS 	(PER_CPU_HIER_TRANSITIONS + GLOBAL_HIER_TRANSITIONS)
+#define HIERARCHICAL_TRANSITIONS 	(PER_CPU_HIER_TRANSITIONS + GLOBAL_HIER_TRANSITIONS)
 
 /* Definitions of places of the CPU resource net */
-#define PLACE_CPU        0
-#define PLACE_EXECUTING  1
-#define PLACE_QUEUE      2
-#define PLACE_RESERVED   3
-#define PLACE_TOEXEC     4
-#define PLACE_DISABLED   5
-
+#define PLACE_CPU 		0
+#define PLACE_EXECUTING 1
+#define PLACE_QUEUE 	2
+#define PLACE_SUSPENDED	3
+#define PLACE_TOEXEC 	4
 
 #define GLOBAL_PLACES	3
 extern int PLACE_GLOBAL_QUEUE; 	
@@ -44,23 +42,16 @@ extern int PLACE_SMP_NOT_READY;
 extern int PLACE_SMP_READY; 	
 
 /* Definitions of transitions of the CPU resource net */
-#define TRAN_ADDTOQUEUE             0   // AD
-#define TRAN_EXEC                  1   // EX
-#define TRAN_EXEC_IDLE             2   // EXID
-#define TRAN_FROM_GLOBAL_CPU       3   // FRGL
-#define TRAN_REMOVE_QUEUE          4   // REMQ
-#define TRAN_RETURN_INVOL          5   // RETIN
-#define TRAN_RETURN_VOL            6   // RETV
-
-#define TRAN_CPU_RESERVE           7   // RESERV
-#define TRAN_UNQUEUE               8   // UNQ
-#define TRAN_CPU_UNRESERVE         9   // UNRES
-#define TRAN_CPU_DISABLE          10   // DISABLE
-#define TRAN_CPU_ENABLE           11   // ENABLE
-
-#define TRAN_ADDTOQUEUE_BOUND     12   // ADDBOU
-#define TRAN_FROM_GLOBAL_BOUND_CPU 13  // FRGLBOU
-
+#define TRAN_ADDTOQUEUE 		0
+#define TRAN_EXEC 				1
+#define TRAN_EXEC_IDLE			2
+#define TRAN_FROM_GLOBAL_CPU 	3
+#define TRAN_REMOVE_QUEUE 		4
+#define TRAN_RETURN_INVOL 		5
+#define TRAN_RETURN_VOL 		6
+#define TRAN_SUSPEND_PROC		7
+#define TRAN_UNQUEUE 			8
+#define TRAN_WAKEUP_PROC		9
 
 #define GLOBAL_TRANSITIONS	3
 extern int TRAN_REMOVE_GLOBAL_QUEUE; 	
@@ -91,14 +82,15 @@ enum thread_place_fsm {
     THREAD_INHIBITED 	= 4
 };
 
+/* Tabla one-hot: fila = estado destino (5 enteros por fila) */
+extern const int *thread_fire[THREADS_PLACES_SIZE];
+
+
+
 //make the contract explicit for the thread FSM implementation */
 #ifndef THREADS_PLACES_SIZE
 #define THREADS_PLACES_SIZE 5
 #endif
-
-
-/* Tabla one-hot: fila = estado destino (5 enteros por fila) */
-extern const int *thread_fire[THREADS_PLACES_SIZE];
 
 
 //Petri thread Methods
@@ -120,8 +112,7 @@ void wakeup_if_needed(struct thread *td);
 //Petri Global Methods
 int  resource_choose_cpu(struct thread *td);
 bool cpu_available_for_proc(int proc_id, int cpu);
-bool is_cpu_disabled(int cpu_n);
-bool is_cpu_reserved(int cpu_n);
+bool is_cpu_suspended(int cpu_n);
 void get_monopolized_cpus(int *dst);
 void free_double_pointer(void** pointer, int rows); 
 bool transition_is_sensitized(int transition_index);
@@ -135,26 +126,5 @@ void resource_expulse_thread(struct thread *td, int flags, const char *func);
 void toggle_pin_thread_to_cpu(int thread_id, int cpu);
 void turn_off_cpu(int cpu);
 void turn_on_cpu(int cpu);
-
-
-
-
-
-
-
-/* En sys/sched_petri.h (o arriba de todo en sched_4bsd.c antes del primer uso) */
-#ifdef INVARIANTS
-#define KASSERT_TD(_expr, _td, _fmt, ...)                                      \
-    KASSERT((_expr), (_fmt " [pid=%d tid=%d curcpu=%d oncpu=%d lastcpu=%d flags=0x%x]", \
-        ##__VA_ARGS__,                                                        \
-        ((_td) && (_td)->td_proc) ? (_td)->td_proc->p_pid : -1,               \
-        (_td) ? (_td)->td_tid : -1,                                           \
-        PCPU_GET(cpuid),                                                      \
-        (_td) ? (int)(_td)->td_oncpu : -1,                                    \
-        (_td) ? (int)(_td)->td_lastcpu : -1,                                  \
-        (_td) ? (u_int)(_td)->td_flags : 0))
-#else
-#define KASSERT_TD(_expr, _td, _fmt, ...) do { } while (0)
-#endif
 
 #endif
