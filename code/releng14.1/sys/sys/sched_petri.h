@@ -33,7 +33,7 @@ extern int PER_CPU_LAST_TRANSITION;
 #define PLACE_CPU 		0
 #define PLACE_EXECUTING 1
 #define PLACE_QUEUE 	2
-#define PLACE_SUSPENDED	3
+#define PLACE_DISABLE	3
 #define PLACE_TOEXEC 	4
 
 #define GLOBAL_PLACES	3
@@ -49,9 +49,9 @@ extern int PLACE_SMP_READY;
 #define TRAN_REMOVE_QUEUE 		4
 #define TRAN_RETURN_INVOL 		5
 #define TRAN_RETURN_VOL 		6
-#define TRAN_SUSPEND_PROC		7
+#define TRAN_DISABLE		    7
 #define TRAN_UNQUEUE 			8
-#define TRAN_WAKEUP_PROC		9
+#define TRAN_ENABLE		        9
 
 #define GLOBAL_TRANSITIONS	3
 extern int TRAN_REMOVE_GLOBAL_QUEUE; 	
@@ -112,7 +112,7 @@ void wakeup_if_needed(struct thread *td);
 //Petri Global Methods
 int  resource_choose_cpu(struct thread *td);
 bool cpu_available_for_proc(int proc_id, int cpu);
-bool is_cpu_suspended(int cpu_n);
+bool is_cpu_disabled(int cpu_n);
 void get_monopolized_cpus(int *dst);
 void free_double_pointer(void** pointer, int rows); 
 bool transition_is_sensitized(int transition_index);
