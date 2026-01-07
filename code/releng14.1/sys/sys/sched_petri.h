@@ -136,4 +136,25 @@ void toggle_pin_thread_to_cpu(int thread_id, int cpu);
 void turn_off_cpu(int cpu);
 void turn_on_cpu(int cpu);
 
+
+
+
+
+
+
+/* En sys/sched_petri.h (o arriba de todo en sched_4bsd.c antes del primer uso) */
+#ifdef INVARIANTS
+#define KASSERT_TD(_expr, _td, _fmt, ...)                                      \
+    KASSERT((_expr), (_fmt " [pid=%d tid=%d curcpu=%d oncpu=%d lastcpu=%d flags=0x%x]", \
+        ##__VA_ARGS__,                                                        \
+        ((_td) && (_td)->td_proc) ? (_td)->td_proc->p_pid : -1,               \
+        (_td) ? (_td)->td_tid : -1,                                           \
+        PCPU_GET(cpuid),                                                      \
+        (_td) ? (int)(_td)->td_oncpu : -1,                                    \
+        (_td) ? (int)(_td)->td_lastcpu : -1,                                  \
+        (_td) ? (u_int)(_td)->td_flags : 0))
+#else
+#define KASSERT_TD(_expr, _td, _fmt, ...) do { } while (0)
+#endif
+
 #endif

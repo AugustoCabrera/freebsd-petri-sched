@@ -692,7 +692,8 @@ sched_runnable(void)
 	int cpu = PCPU_GET(cpuid);
 
 	if (is_cpu_disabled(cpu))
-		return (0);
+    return runq_check(&runq_pcpu[cpu]);   /* QUIESCE: drenar cola local */
+
 
 	if (is_cpu_reserved(cpu))
 		return runq_check(&runq_pcpu[cpu]);   /* RESERVED no mira global */
@@ -1328,37 +1329,84 @@ ts_runq_cpu(const struct td_sched *ts)
  * - RESERVED: SOLO threads bound y bound a *ese* cpu.
  * - además respetá cpuset + tu política cpu_available_for_proc().
  */
+
 static __inline int
 cpu_allowed_for_td(struct thread *td, struct td_sched *ts, int cpu)
 {
     int bcpu;
 
-    if (cpu < 0 || cpu >= CPU_NUMBER)
-        return (0);
+    KASSERT(td != NULL, ("cpu_allowed_for_td: td NULL"));
+    KASSERT(ts != NULL, ("cpu_allowed_for_td: ts NULL"));
 
+    /* Rango */
+    KASSERT(cpu >= 0 && cpu < CPU_NUMBER,
+        ("cpu_allowed_for_td: cpu fuera de rango cpu=%d CPU_NUMBER=%d pid=%d tid=%d",
+         cpu, CPU_NUMBER, td->td_proc->p_pid, td->td_tid));
+
+    /* Si está disabled, no hay nada más que discutir */
     if (is_cpu_disabled(cpu))
         return (0);
 
-    /* Si el thread es BOUND, solo puede correr en SU cpu, siempre. */
+    /*
+     * BOUND: inconsistencia fuerte si no podemos inferir a qué CPU está bound.
+     * En tu diseño, un thread BOUND debería estar asociado a una runq per-cpu.
+     */
     if (td->td_flags & TDF_BOUND) {
         bcpu = ts_runq_cpu(ts);
-        if (bcpu < 0)
-            return (0); /* o KASSERT si querés detectar inconsistencia */
+
+        KASSERT(bcpu >= 0 && bcpu < CPU_NUMBER,
+            ("cpu_allowed_for_td: td BOUND pero ts_runq no es per-cpu (bcpu=%d ts_runq=%p) pid=%d tid=%d",
+             bcpu, ts->ts_runq, td->td_proc->p_pid, td->td_tid));
+
+        /*
+         * Si el thread está BOUND a un CPU que ahora está disabled,
+         * este estado te deja “sin CPU allowed” => lo querés detectar.
+         */
+        // KASSERT(!is_cpu_disabled(bcpu),
+        //     ("cpu_allowed_for_td: td BOUND a cpu%d pero está DISABLED (pid=%d tid=%d)",
+        //      bcpu, td->td_proc->p_pid, td->td_tid));
+
+		if (is_cpu_disabled(bcpu))
+    return (0);   /* queda “no allowed” hasta que lo migres/rebindees */
+
+
+
         if (bcpu != cpu)
             return (0);
     }
 
-    /* Si el CPU es RESERVED, además exigimos que el thread sea bound (redundante pero claro) */
+    /*
+     * RESERVED: por política, solo threads BOUND pueden correr.
+     * Si llegás acá con RESERVED y !BOUND es normal devolver 0,
+     * pero si querés detectar “por qué no corre nunca”, podés
+     * dejarlo como return 0 sin assert.
+     */
     if (is_cpu_reserved(cpu)) {
         if ((td->td_flags & TDF_BOUND) == 0)
             return (0);
+
+        /* Si es RESERVED y el thread es BOUND, debería coincidir. */
+        bcpu = ts_runq_cpu(ts);
+        KASSERT(bcpu == cpu,
+            ("cpu_allowed_for_td: cpu%d RESERVED pero td BOUND a cpu%d (pid=%d tid=%d)",
+             cpu, bcpu, td->td_proc->p_pid, td->td_tid));
     }
 
-    if (!THREAD_CAN_SCHED(td, cpu))
+    /* cpuset/afinidad */
+    if (!THREAD_CAN_SCHED(td, cpu)) {
+        /* Si querés detectarlo fuerte, descomentá:
+         * KASSERT(0, ("cpu_allowed_for_td: THREAD_CAN_SCHED=0 cpu=%d pid=%d tid=%d", ...));
+         */
         return (0);
+    }
 
-    if (!cpu_available_for_proc(td->td_proc->p_pid, cpu))
+    /* monopolio (aunque digas que no se usa, esto detecta estados raros igual) */
+    if (!cpu_available_for_proc(td->td_proc->p_pid, cpu)) {
+        /* Si querés detectarlo fuerte, descomentá:
+         * KASSERT(0, ("cpu_allowed_for_td: cpu_available_for_proc=0 cpu=%d pid=%d tid=%d", ...));
+         */
         return (0);
+    }
 
     return (1);
 }
@@ -1457,7 +1505,7 @@ sched_add(struct thread *td, int flags)
 	    sched_tdname(curthread));
 	KTR_POINT1(KTR_SCHED, "thread", sched_tdname(curthread), "wokeup",
 	    KTR_ATTR_LINKED, sched_tdname(td));
-	SDT_PROBE4(sched, , , enqueue, td, td->td_proc, NULL, 
+	SDT_PROBE4(sched, , , enqueue, td, td->td_proc, NULL,
 	    flags & SRQ_PREEMPTED);
 
 	/*
@@ -1476,6 +1524,18 @@ sched_add(struct thread *td, int flags)
 	wakeup_if_needed(td);
 
 	/*
+	 * NUEVO: boundcpu tiene que salir del "runq previo" ANTES de pisar ts->ts_runq.
+	 * Si calculás boundcpu después de setear ts->ts_runq=&runq, siempre da -1.
+	 */
+	struct runq *oldrq = ts->ts_runq;
+	int boundcpu = (oldrq != NULL && oldrq != &runq) ?
+	    (int)(oldrq - &runq_pcpu[0]) : -1;
+
+	/* default: global */
+	cpu = NOCPU;
+	ts->ts_runq = &runq;
+
+	/*
 	 * If SMP is started and the thread is pinned or otherwise limited to
 	 * a specific set of CPUs, queue the thread to a per-CPU run queue.
 	 * Otherwise, queue the thread to the global run queue.
@@ -1484,70 +1544,114 @@ sched_add(struct thread *td, int flags)
 	 * as per-CPU state may not be initialized yet and we may crash if we
 	 * try to access the per-CPU run queues.
 	 */
-	/* boundcpu SOLO es válido si ts_runq apunta a runq_pcpu[] */
-int boundcpu = SKE_RUNQ_PCPU(ts) ? (int)(ts->ts_runq - &runq_pcpu[0]) : -1;
+	if (smp_started && (td->td_pinned != 0 || (td->td_flags & TDF_BOUND) ||
+	    (ts->ts_flags & TSF_AFFINITY))) {
 
-if (smp_started && (td->td_pinned != 0 || (td->td_flags & TDF_BOUND) ||
-    (ts->ts_flags & TSF_AFFINITY))) {
+		int enqueue_tr = TRAN_ADDTOQUEUE;
 
-    int enqueue_tr = TRAN_ADDTOQUEUE;
+		if (td->td_pinned != 0) {
+			cpu = td->td_lastcpu;
 
-    if (td->td_pinned != 0) {
-    cpu = td->td_lastcpu;
+			KASSERT_TD(cpu != NOCPU, td,
+			    "sched_add: pinned con lastcpu=NOCPU");
 
-	KASSERT(cpu != NOCPU, ("sched_add: pinned con lastcpu=NOCPU (pid=%d)", td->td_proc->p_pid));
+			KASSERT_TD(cpu >= 0 && cpu < CPU_NUMBER, td,
+			    "sched_add: pinned cpu fuera de rango cpu=%u", cpu);
 
-    /* pinned no puede violar tu política: si no es permitido, es bug de estado */
-    KASSERT(cpu_allowed_for_td(td, ts, cpu),
-        ("sched_add: pinned en cpu no permitido (cpu=%u pid=%d bound=%d)",
-         cpu, td->td_proc->p_pid, !!(td->td_flags & TDF_BOUND)));
+			/*
+			 * NUEVO: NO asserts de !disabled acá.
+			 * Si el CPU se marcó DISABLED mientras estabas pinned,
+			 * igual necesitás poder encolar para drenar (evitar deadlock).
+			 */
 
-    /* si está RESERVED, solo va a pasar si además es BOUND -> usar ADDBOU */
-    enqueue_tr = is_cpu_reserved(cpu) ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
+			/* Si NO está disabled, validás con tu filtro normal */
+			if (!is_cpu_disabled(cpu)) {
+				KASSERT_TD(cpu_allowed_for_td(td, ts, cpu), td,
+				    "sched_add: pinned cpu no permitido cpu=%u disabled=%d reserved=%d can_sched=%d",
+				    cpu, is_cpu_disabled(cpu), is_cpu_reserved(cpu), THREAD_CAN_SCHED(td, cpu));
+			}
 
-	KASSERT(transition_is_sensitized(TRANSITION(cpu, enqueue_tr)),
-        ("sched_add: enqueue no sensitized for pinned (cpu=%u tr=%d)",
-         cpu, enqueue_tr));
+			enqueue_tr = is_cpu_reserved(cpu) ?
+			    TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
 
-} else if ((td->td_flags & TDF_BOUND)) {
+			KASSERT_TD(transition_is_sensitized(TRANSITION(cpu, enqueue_tr)), td,
+			    "sched_add: enqueue no sensitized (pinned) cpu=%u tr=%d disabled=%d reserved=%d",
+			    cpu, enqueue_tr, is_cpu_disabled(cpu), is_cpu_reserved(cpu));
 
-		KASSERT(boundcpu >= 0,
-        ("sched_add: BOUND td sin runq_pcpu (ts_runq=%p)", ts->ts_runq));
-		
-        /* Thread bound: el CPU “target” es el de su runq per-cpu */
-         cpu = (u_int)boundcpu;
+		} else if ((td->td_flags & TDF_BOUND)) {
+
+			KASSERT(boundcpu >= 0,
+			    ("sched_add: BOUND td sin runq_pcpu (oldrq=%p)", oldrq));
+
+			/* Thread bound: el CPU “target” es el de su runq per-cpu */
+			cpu = (u_int)boundcpu;
+
+			/* Si bound está disabled, rebind a uno activo */
+			if (is_cpu_disabled(cpu)) {
+				u_int newcpu = PCPU_GET(cpuid);
+
+				if (newcpu >= CPU_NUMBER || is_cpu_disabled(newcpu)) {
+					CPU_FOREACH(newcpu) {
+						if (!is_cpu_disabled(newcpu))
+							break;
+					}
+				}
+				KASSERT(newcpu < CPU_NUMBER && !is_cpu_disabled(newcpu),
+				    ("sched_add: no hay CPU activo para rebind (old=%u)", cpu));
+
+				ts->ts_runq = &runq_pcpu[newcpu];
+				cpu = newcpu;
+			}
+
+			/*
+			 * REGLA:
+			 * - Si el CPU tiene token en RESERVED -> usar transición ADDBOU
+			 * - Si no -> usar ADDTOQUEUE normal
+			 */
+			enqueue_tr = is_cpu_reserved(cpu) ?
+			    TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
+
+			/* En BOUND no hay fallback: si no está sensitized, es inconsistencia del net/estado */
+			KASSERT(transition_is_sensitized(TRANSITION(cpu, enqueue_tr)),
+			    ("sched_add: enqueue no sensitized for BOUND (cpu=%u tr=%d)", cpu, enqueue_tr));
+
+		} else {
+			/* Afinidad (no bound): elegí CPU normal (cpu_allowed_for_td filtra RESERVED) */
+			cpu = sched_pickcpu(td);
+			enqueue_tr = TRAN_ADDTOQUEUE;
+		}
 
 		/*
-		* REGLA:
-		* - Si el CPU tiene token en RESERVED -> usar transición ADDBOU
-		* - Si no -> usar ADDTOQUEUE normal
-		*/
-		enqueue_tr = is_cpu_reserved(cpu) ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
+		 * NUEVO (QUIESCE):
+		 * si target está disabled, NO lo encoles ahí (manda a global).
+		 * EXCEPCIÓN: si td está pinned, dejalo en su cpu para drenar.
+		 */
+		if (cpu != NOCPU && is_cpu_disabled(cpu) && td->td_pinned == 0) {
+			cpu = NOCPU;
+			ts->ts_runq = &runq;
+			resource_fire_net(td, TRAN_QUEUE_GLOBAL, "sched_add_quiesce_global");
+			single_cpu = 0;
+			goto enqueue;
+		}
 
-		/* En BOUND no hay fallback: si no está sensitized, es inconsistencia del net/estado */
-		KASSERT(transition_is_sensitized(TRANSITION(cpu, enqueue_tr)),
-			("sched_add: enqueue no sensitized for BOUND (cpu=%u tr=%d)", cpu, enqueue_tr));
+		ts->ts_runq = &runq_pcpu[cpu];
+
+		KASSERT_TD(ts->ts_runq == &runq_pcpu[cpu], td,
+		    "sched_add: ts_runq no coincide con cpu=%u ts_runq=%p", cpu, ts->ts_runq);
+
+		single_cpu = 1;
+
+		resource_fire_net(td, TRANSITION(cpu, enqueue_tr), "sched_add");
+		td->mark = thread_fire[THREAD_RUNQ];
 
 	} else {
-		/* Afinidad (no bound): elegí CPU normal (cpu_allowed_for_td filtra RESERVED) */
-		cpu = sched_pickcpu(td);
-		enqueue_tr = TRAN_ADDTOQUEUE;
+		cpu = NOCPU;
+		ts->ts_runq = &runq;
+		resource_fire_net(td, TRAN_QUEUE_GLOBAL, "sched_add");
+		// (no FSM call)
 	}
 
-    ts->ts_runq = &runq_pcpu[cpu];
-    single_cpu = 1;
-
-    resource_fire_net(td, TRANSITION(cpu, enqueue_tr), "sched_add");
-    td->mark = thread_fire[THREAD_RUNQ];
-
-} else {
-    cpu = NOCPU;
-    ts->ts_runq = &runq;
-    resource_fire_net(td, TRAN_QUEUE_GLOBAL, "sched_add");
-    // (no FSM call)
-}
-
-
+enqueue:
 	if ((td->td_flags & TDF_NOLOAD) == 0)
 		sched_load_add();
 	runq_add(ts->ts_runq, td, flags);
@@ -1556,7 +1660,7 @@ if (smp_started && (td->td_pinned != 0 || (td->td_flags & TDF_BOUND) ||
 
 	cpuid = PCPU_GET(cpuid);
 	if (single_cpu && cpu != cpuid) {
-	        kick_other_cpu(td->td_priority, cpu);
+		kick_other_cpu(td->td_priority, cpu);
 	} else {
 		if (!single_cpu) {
 			tidlemsk = idle_cpus_mask;
@@ -1677,10 +1781,20 @@ sched_choose(void)
 		cpu_n = PCPU_GET(cpuid);
 
 		/* DISABLED: nadie corre en este CPU (solo idle) */
+		/* QUIESCE: drenar solo la cola local, no tomar de global */
 		if (is_cpu_disabled(cpu_n)) {
-			td = NULL;
-			goto idle_out_smp;
+			tdcpu = runq_choose(&runq_pcpu[cpu_n]);
+			if (tdcpu != NULL) {
+				td = tdcpu;
+				rq = &runq_pcpu[cpu_n];
+				/* opcional: tu Petri log de UNQUEUE */
+			} else {
+				td = NULL;
+				goto idle_out_smp; /* vacía -> idle */
+			}
+			goto out_smp;
 		}
+
 
 		/* Top de la cola per-cpu */
 		tdcpu = runq_choose(&runq_pcpu[cpu_n]);
@@ -1826,6 +1940,11 @@ sched_bind(struct thread *td, int cpu)
 	td->td_flags |= TDF_BOUND;
 #ifdef SMP
 	ts->ts_runq = &runq_pcpu[cpu];
+
+	KASSERT_TD(ts->ts_runq == &runq_pcpu[cpu], td,
+    "sched_add: ts_runq no coincide con cpu=%u ts_runq=%p", cpu, ts->ts_runq);
+
+
 	if (PCPU_GET(cpuid) == cpu)
 		return;
 
