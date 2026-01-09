@@ -182,14 +182,17 @@ init_cpu_matrix(int cpu_n)
 
 	//incidence between each cpu and global resources
 	resource_net->incidence_matrix[PLACE_GLOBAL_QUEUE][TRANSITION(cpu_n, TRAN_FROM_GLOBAL_CPU)] = -1;
+	resource_net->incidence_matrix[PLACE_GLOBAL_QUEUE][TRANSITION(cpu_n, TRAN_FROM_GLOBAL_BOUND_CPU)] = -1;
 
 	if (cpu_n != 0) { //inhibit executing to cpus other than 0 because smp hasnt started
 		resource_net->inhibition_matrix[PLACE_SMP_NOT_READY][TRANSITION(cpu_n, TRAN_FROM_GLOBAL_CPU)] = 1;
 		resource_net->inhibition_matrix[PLACE_SMP_NOT_READY][TRANSITION(cpu_n, TRAN_EXEC)] = 1;
+		resource_net->inhibition_matrix[PLACE_SMP_NOT_READY][TRANSITION(cpu_n, TRAN_FROM_GLOBAL_BOUND_CPU)] = 1;
 	}
 
 	//inhibit smp execution when not ready
-	resource_net->inhibition_matrix[PLACE_SMP_NOT_READY][TRANSITION(cpu_n, TRAN_ADDTOQUEUE)] = 1;
+	// resource_net->inhibition_matrix[PLACE_SMP_NOT_READY][TRANSITION(cpu_n, TRAN_ADDTOQUEUE)] = 1;
+	// resource_net->inhibition_matrix[PLACE_SMP_NOT_READY][TRANSITION(cpu_n, TRAN_ADDTOQUEUE_BOUND)] = 1;
 }
 
 void

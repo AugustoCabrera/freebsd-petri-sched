@@ -17,8 +17,8 @@
 #define PLACE(cpu, place)            (CPU_BASE_PLACE(cpu) + (place))
 
 /* Definition of constants of the resource petri net */
-#define CPU_BASE_PLACES 		5
-#define CPU_BASE_TRANSITIONS	10
+#define CPU_BASE_PLACES 		6
+#define CPU_BASE_TRANSITIONS	14
 extern int CPU_NUMBER; //will be defined at runtime with mp_ncpus			
 extern int CPU_NUMBER_PLACES; 		
 extern int CPU_NUMBER_TRANSITIONS; 	
@@ -30,11 +30,13 @@ extern int PER_CPU_LAST_TRANSITION;
 // #define HIERARCHICAL_TRANSITIONS 	(PER_CPU_HIER_TRANSITIONS + GLOBAL_HIER_TRANSITIONS)
 
 /* Definitions of places of the CPU resource net */
-#define PLACE_CPU 		0
-#define PLACE_EXECUTING 1
-#define PLACE_QUEUE 	2
-#define PLACE_DISABLE	3
-#define PLACE_TOEXEC 	4
+#define PLACE_CPU        0
+#define PLACE_EXECUTING  1
+#define PLACE_QUEUE      2
+#define PLACE_RESERVED   3
+#define PLACE_TOEXEC     4
+#define PLACE_DISABLED   5
+
 
 #define GLOBAL_PLACES	3
 extern int PLACE_GLOBAL_QUEUE; 	
@@ -42,16 +44,22 @@ extern int PLACE_SMP_NOT_READY;
 extern int PLACE_SMP_READY; 	
 
 /* Definitions of transitions of the CPU resource net */
-#define TRAN_ADDTOQUEUE 		0
-#define TRAN_EXEC 				1
-#define TRAN_EXEC_IDLE			2
-#define TRAN_FROM_GLOBAL_CPU 	3
-#define TRAN_REMOVE_QUEUE 		4
-#define TRAN_RETURN_INVOL 		5
-#define TRAN_RETURN_VOL 		6
-#define TRAN_DISABLE		    7
-#define TRAN_UNQUEUE 			8
-#define TRAN_ENABLE		        9
+#define TRAN_ADDTOQUEUE             0   // AD
+#define TRAN_EXEC                  1   // EX
+#define TRAN_EXEC_IDLE             2   // EXID
+#define TRAN_FROM_GLOBAL_CPU       3   // FRGL
+#define TRAN_REMOVE_QUEUE          4   // REMQ
+#define TRAN_RETURN_INVOL          5   // RETIN
+#define TRAN_RETURN_VOL            6   // RETV
+
+#define TRAN_CPU_RESERVE           7   // RESERV
+#define TRAN_UNQUEUE               8   // UNQ
+#define TRAN_CPU_UNRESERVE         9   // UNRES
+#define TRAN_CPU_DISABLE          10   // DISABLE
+#define TRAN_CPU_ENABLE           11   // ENABLE
+
+#define TRAN_ADDTOQUEUE_BOUND     12   // ADDBOU
+#define TRAN_FROM_GLOBAL_BOUND_CPU 13  // FRGLBOU
 
 #define GLOBAL_TRANSITIONS	3
 extern int TRAN_REMOVE_GLOBAL_QUEUE; 	
