@@ -251,7 +251,7 @@ is_inhibited(int places_index, int transition_index)
 bool 
 is_cpu_disabled(int cpu_n)
 {
-	return resource_net->mark[PLACE(cpu_n, PLACE_DISABLE)] > 0;
+	return resource_net->mark[PLACE(cpu_n, PLACE_DISABLED)] > 0;
 }
 
 /**
@@ -393,7 +393,7 @@ toggle_active_cpu(int cpu, bool turn_off)
 		return false;
 	}
 
-	const int base_tr = turn_off ? TRAN_DISABLE : TRAN_ENABLE;
+	const int base_tr = turn_off ? TRAN_CPU_DISABLE : TRAN_CPU_ENABLE;
     const int tr = TRANSITION(cpu, base_tr);
     const char *action = turn_off ? "turned off" : "turned on";
 

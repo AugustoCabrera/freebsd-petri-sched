@@ -73,8 +73,8 @@ const char *thread_places[THREADS_PLACES_SIZE] = {
 	"INACTIVE", "CAN_RUN", "RUNQ", "RUNNING", "INHIBITED"
 };
 
-/* Internal prototypes */
-static void thread_print_net(struct thread *pt);
+// /* Internal prototypes */
+// static void thread_print_net(struct thread *pt);
 
 /* ============================================================
  * Thread net initialization
@@ -112,13 +112,13 @@ void wakeup_if_needed(struct thread *td) {
  * ============================================================
  */
 
-static void
-thread_print_net(struct thread *pt)
-{
-	log(LOG_WARNING, "\t\t(sched_petri) Thread %2d state:", pt->td_tid);
-	for (int i = 0; i < THREADS_PLACES_SIZE; i++) {
-		if (pt->mark[i] > 0)
-			log(LOG_WARNING, " %s(%d)", thread_places[i], pt->mark[i]);
-	}
-	log(LOG_WARNING, "\n");
-}
+// static void
+// thread_print_net(struct thread *pt)
+// {
+// 	log(LOG_WARNING, "\t\t(sched_petri) Thread %2d state:", pt->td_tid);
+// 	for (int i = 0; i < THREADS_PLACES_SIZE; i++) {
+// 		if (pt->mark[i] > 0)
+// 			log(LOG_WARNING, " %s(%d)", thread_places[i], pt->mark[i]);
+// 	}
+// 	log(LOG_WARNING, "\n");
+// }
