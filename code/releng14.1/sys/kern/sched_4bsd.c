@@ -1383,6 +1383,11 @@ sched_add(struct thread *td, int flags)
 			ts->ts_runq = &runq;
 	}
 
+	/* Reserved support: choose ADDTOQUEUE vs ADDTOQUEUE_BOUND */
+	int addtr = TRAN_ADDTOQUEUE;
+	bool reserved = false;
+	bool allowed_reserved = false;
+
 	if (smp_started && (td->td_pinned != 0 || (td->td_flags & TDF_BOUND) ||
 	    (ts->ts_flags & TSF_AFFINITY))) {
 
@@ -1398,9 +1403,15 @@ sched_add(struct thread *td, int flags)
 			 * the net allows enqueue there. Otherwise pick another CPU.
 			 * (No panic here: early boot/transient states can exist.)
 			 */
-			if (boundcpu != -1 &&
-			    transition_is_sensitized(TRANSITION(boundcpu, TRAN_ADDTOQUEUE))) {
-				cpu = (u_int)boundcpu;
+			if (boundcpu != -1) {
+				reserved = is_cpu_reserved(boundcpu);
+				addtr = reserved ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
+
+				if (transition_is_sensitized(TRANSITION(boundcpu, addtr))) {
+					cpu = (u_int)boundcpu;
+				} else {
+					cpu = sched_pickcpu(td);
+				}
 			} else {
 				cpu = sched_pickcpu(td);
 			}
@@ -1414,19 +1425,38 @@ sched_add(struct thread *td, int flags)
 		    ("sched_add: selected cpu out of range: %u", cpu));
 
 		/*
+		 * Decide which enqueue transition we will use for this cpu:
+		 * - normal CPUs:        ADDTOQUEUE
+		 * - reserved CPUs:      ADDTOQUEUE_BOUND (only if thread is bound/pinned to that cpu)
+		 */
+		reserved = is_cpu_reserved(cpu);
+		allowed_reserved = (td->td_pinned != 0) ||
+		    (((td->td_flags & TDF_BOUND) != 0) && (boundcpu == (int)cpu));
+		addtr = reserved ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
+
+		/*
 		 * 2) HARD RULE: don't enqueue new threads on a CPU that cannot
-		 * accept ADDTOQUEUE (DISABLE/SUSPENDED/inhibited).
+		 * accept enqueue (DISABLE/SUSPENDED/inhibited).
+		 * Also: if CPU is RESERVED, only allow BOUND/PINNED threads and use ADDBOU.
 		 * Pick another cpu; if none, fallback to global.
 		 */
-		if (!transition_is_sensitized(TRANSITION(cpu, TRAN_ADDTOQUEUE))) {
+		if ((reserved && !allowed_reserved) ||
+		    !transition_is_sensitized(TRANSITION(cpu, addtr))) {
 			u_int altcpu;
 
 			altcpu = sched_pickcpu(td);
 			KASSERT(altcpu < mp_ncpus,
 			    ("sched_add: altcpu out of range: %u", altcpu));
 
+			/* Recompute rules for altcpu */
+			reserved = is_cpu_reserved(altcpu);
+			allowed_reserved = (td->td_pinned != 0) ||
+			    (((td->td_flags & TDF_BOUND) != 0) && (boundcpu == (int)altcpu));
+			addtr = reserved ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
+
 			if (altcpu != cpu &&
-			    transition_is_sensitized(TRANSITION(altcpu, TRAN_ADDTOQUEUE))) {
+			    !(reserved && !allowed_reserved) &&
+			    transition_is_sensitized(TRANSITION(altcpu, addtr))) {
 				cpu = altcpu;
 			} else {
 				/* No per-cpu target available -> global runq */
@@ -1446,9 +1476,17 @@ sched_add(struct thread *td, int flags)
 			}
 		}
 
+		/* Recompute final add transition for chosen cpu (in case we changed it) */
+		reserved = is_cpu_reserved(cpu);
+		allowed_reserved = (td->td_pinned != 0) ||
+		    (((td->td_flags & TDF_BOUND) != 0) && (boundcpu == (int)cpu));
+		addtr = reserved ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
+
 		/* 3) commit to per-cpu runq only after net validation */
-		KASSERT(transition_is_sensitized(TRANSITION(cpu, TRAN_ADDTOQUEUE)),
-		    ("sched_add: committing to disabled cpu%u (ADDTOQUEUE not sensitized)", cpu));
+		KASSERT(!(reserved && !allowed_reserved),
+		    ("sched_add: committing non-bound thread to reserved cpu%u", cpu));
+		KASSERT(transition_is_sensitized(TRANSITION(cpu, addtr)),
+		    ("sched_add: committing to disabled cpu%u (enqueue tr %d not sensitized)", cpu, addtr));
 
 		ts->ts_runq = &runq_pcpu[cpu];
 		single_cpu = 1;
@@ -1461,7 +1499,7 @@ sched_add(struct thread *td, int flags)
 		    "sched_add: Put td_sched:%p(td:%p) on cpu%d runq", ts, td,
 		    cpu);
 
-		resource_fire_net(td, TRANSITION(cpu, TRAN_ADDTOQUEUE), "sched_add");
+		resource_fire_net(td, TRANSITION(cpu, addtr), "sched_add");
 		td->mark = thread_fire[THREAD_RUNQ];
 
 	} else {
@@ -1483,7 +1521,7 @@ queued:
 	/*
 	 * Final invariants before enqueue:
 	 * - If cpu == NOCPU -> must be global runq.
-	 * - If cpu != NOCPU -> must be per-cpu runq and net must allow addtoqueue.
+	 * - If cpu != NOCPU -> must be per-cpu runq and net must allow enqueue.
 	 */
 	if (cpu == NOCPU) {
 		KASSERT(ts->ts_runq == &runq,
@@ -1495,8 +1533,17 @@ queued:
 		    ("sched_add: cpu out of range at enqueue: %u", cpu));
 		KASSERT(ts->ts_runq == &runq_pcpu[cpu],
 		    ("sched_add: cpu%u but ts_runq not runq_pcpu[cpu]", cpu));
-		KASSERT(transition_is_sensitized(TRANSITION(cpu, TRAN_ADDTOQUEUE)),
-		    ("sched_add: enqueue to disabled cpu%u (post-check)", cpu));
+
+		/* Validate enqueue transition according to RESERVED state */
+		reserved = is_cpu_reserved(cpu);
+		allowed_reserved = (td->td_pinned != 0) ||
+		    (((td->td_flags & TDF_BOUND) != 0) && (boundcpu == (int)cpu));
+		addtr = reserved ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
+
+		KASSERT(!(reserved && !allowed_reserved),
+		    ("sched_add: enqueue non-bound thread on reserved cpu%u (post-check)", cpu));
+		KASSERT(transition_is_sensitized(TRANSITION(cpu, addtr)),
+		    ("sched_add: enqueue to disabled cpu%u (post-check tr=%d)", cpu, addtr));
 	}
 
 	if ((td->td_flags & TDF_NOLOAD) == 0)
