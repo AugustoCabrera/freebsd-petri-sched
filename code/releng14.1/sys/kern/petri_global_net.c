@@ -26,51 +26,79 @@ struct petri_cpu_resource_net *resource_net;
 int *monopolized_cpus_per_proc = NULL;
 
 const int base_resource_matrix[CPU_BASE_PLACES][CPU_BASE_TRANSITIONS] = {
-	/*Base matrix */
-//AD EX EXID FRGL REMQ RETIN RETV SUS UNQ WUP	
-	{ 0, 0,-1,-1, 0, 1, 1, 0,-1, 0 },//CPU
-	{ 0, 1, 0, 0, 0,-1,-1, 0, 0, 0 },//EXEC
-	{ 1, 0, 0, 0,-1, 0, 0, 0,-1, 0 },//Q
-	{ 0, 0, 0, 0, 0, 0, 0, 1, 0,-1 },//SUSD
-	{ 0,-1, 1, 1, 0, 0, 0, 0, 1, 0 }//TOEX
+    // AD  EX  EXID  FRGL  REMQ  RETIN  RETV  RESERV  UNQ  UNRES  DISABLE  ENABLE  ADDBOU  FRGLBOU
+    {  0,  0,  -1,   -1,    0,     1,     1,     0,   -1,    0,      0,      0,      0,     -1 }, // CPU
+    {  0,  1,   0,    0,    0,    -1,    -1,     0,    0,    0,      0,      0,      0,      0 }, // EXEC
+    {  1,  0,   0,    0,   -1,     0,     0,     0,   -1,    0,      0,      0,      1,      0 }, // Q
+    {  0,  0,   0,    0,    0,     0,     0,     1,    0,   -1,      0,      0,      0,      0 }, // RESERVED
+    {  0, -1,   1,    1,    0,     0,     0,     0,    1,    0,      0,      0,      0,      1 }, // TOEX
+    {  0,  0,   0,    0,    0,     0,     0,     0,    0,    0,      1,     -1,      0,      0 }  // DISABLED
 };
+
 
 const int base_resource_inhibition_matrix[CPU_BASE_PLACES][CPU_BASE_TRANSITIONS] = {
-	/*Base inhibition matrix */
-	{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-	{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-	{ 0, 0, 1, 0, 0, 0, 0, 0, 0, 0 },
-	{ 1, 0, 0, 1, 0, 0, 0, 0, 0, 0 },
-	{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
+    // AD  EX  EXID  FRGL  REMQ  RETIN  RETV  RESERV  UNQ  UNRES  DISABLE  ENABLE  ADDBOU  FRGLBOU
+    {  0,  0,   0,    0,    0,     0,     0,     0,    0,    0,      0,      0,      0,      0 }, // CPU
+    {  0,  0,   0,    0,    0,     0,     0,     0,    0,    0,      0,      0,      0,      0 }, // EXEC
+    {  0,  0,   1,    0,    0,     0,     0,     0,    0,    0,      0,      0,      0,      0 }, // Q
+    {  1,  0,   0,    1,    0,     0,     0,     0,    0,    0,      1,      0,      0,      0 }, // RESERVED
+    {  0,  0,   0,    0,    0,     0,     0,     0,    0,    0,      0,      0,      0,      0 }, // TOEX
+    {  1,  0,   0,    1,    0,     0,     0,     1,    0,    0,      0,      0,      1,      1 }  // DISABLED
 };
 
-int hierarchical_transitions[HIERARCHICAL_TRANSITIONS] = {
-	TRAN_ADDTOQUEUE,
-	TRAN_EXEC,
-	TRAN_EXEC_IDLE,
-	TRAN_RETURN_INVOL,
-	TRAN_RETURN_VOL,
-	TRAN_REMOVE_QUEUE
-};
+// int hierarchical_transitions[HIERARCHICAL_TRANSITIONS] = {
+// 	TRAN_ADDTOQUEUE,
+// 	TRAN_EXEC,
+// 	TRAN_EXEC_IDLE,
+// 	TRAN_RETURN_INVOL,
+// 	TRAN_RETURN_VOL,
+// 	TRAN_REMOVE_QUEUE
+// };
 
-const int hierarchical_corresponse[HIERARCHICAL_TRANSITIONS] = { 
-	TRAN_ON_QUEUE, 
-	TRAN_SET_RUNNING, 
-	TRAN_ON_QUEUE, 
-	TRAN_SWITCH_OUT, 
-	TRAN_TO_WAIT_CHANNEL, 
-	TRAN_REMOVE, 	
-	TRAN_ON_QUEUE, 	
-	TRAN_REMOVE 
-};
+// const int hierarchical_corresponse[HIERARCHICAL_TRANSITIONS] = { 
+// 	TRAN_ON_QUEUE, 
+// 	TRAN_SET_RUNNING, 
+// 	TRAN_ON_QUEUE, 
+// 	TRAN_SWITCH_OUT, 
+// 	TRAN_TO_WAIT_CHANNEL, 
+// 	TRAN_REMOVE, 	
+// 	TRAN_ON_QUEUE, 	
+// 	TRAN_REMOVE 
+// };
 
 const char *transitions_names[] = {
-	"ADDTOQUEUE_P0", "EXEC_P0", "EXEC_IDLE_P0", "FROM_GLOBAL_CPU_P0", "REMOVE_QUEUE_P0", "RETURN_INVOL_P0", "RETURN_VOL_P0", "SUSPEND_PROC_P0", "UNQUEUE_P0", "WAKEUP_PROC_P0",
-	"ADDTOQUEUE_P1", "EXEC_P1", "EXEC_IDLE_P1", "FROM_GLOBAL_CPU_P1", "REMOVE_QUEUE_P1", "RETURN_INVOL_P1", "RETURN_VOL_P1", "SUSPEND_PROC_P1", "UNQUEUE_P1", "WAKEUP_PROC_P1",
-	"ADDTOQUEUE_P2", "EXEC_P2", "EXEC_IDLE_P2", "FROM_GLOBAL_CPU_P2", "REMOVE_QUEUE_P2", "RETURN_INVOL_P2", "RETURN_VOL_P2", "SUSPEND_PROC_P2", "UNQUEUE_P2", "WAKEUP_PROC_P2",
-	"ADDTOQUEUE_P3", "EXEC_P3", "EXEC_IDLE_P3", "FROM_GLOBAL_CPU_P3", "REMOVE_QUEUE_P3", "RETURN_INVOL_P3", "RETURN_VOL_P3", "SUSPEND_PROC_P3", "UNQUEUE_P3", "WAKEUP_PROC_P3",
-	"REMOVE_GLOBAL_QUEUE", "START_SMP", "QUEUE_GLOBAL"
+    /* P0 */
+    "ADDTOQUEUE_P0", "EXEC_P0", "EXEC_IDLE_P0", "FROM_GLOBAL_CPU_P0",
+    "REMOVE_QUEUE_P0", "RETURN_INVOL_P0", "RETURN_VOL_P0",
+    "CPU_RESERVE_P0", "UNQUEUE_P0", "CPU_UNRESERVE_P0",
+    "CPU_DISABLE_P0", "CPU_ENABLE_P0",
+    "ADDTOQUEUE_BOUND_P0", "FROM_GLOBAL_BOUND_CPU_P0",
+
+    /* P1 */
+    "ADDTOQUEUE_P1", "EXEC_P1", "EXEC_IDLE_P1", "FROM_GLOBAL_CPU_P1",
+    "REMOVE_QUEUE_P1", "RETURN_INVOL_P1", "RETURN_VOL_P1",
+    "CPU_RESERVE_P1", "UNQUEUE_P1", "CPU_UNRESERVE_P1",
+    "CPU_DISABLE_P1", "CPU_ENABLE_P1",
+    "ADDTOQUEUE_BOUND_P1", "FROM_GLOBAL_BOUND_CPU_P1",
+
+    /* P2 */
+    "ADDTOQUEUE_P2", "EXEC_P2", "EXEC_IDLE_P2", "FROM_GLOBAL_CPU_P2",
+    "REMOVE_QUEUE_P2", "RETURN_INVOL_P2", "RETURN_VOL_P2",
+    "CPU_RESERVE_P2", "UNQUEUE_P2", "CPU_UNRESERVE_P2",
+    "CPU_DISABLE_P2", "CPU_ENABLE_P2",
+    "ADDTOQUEUE_BOUND_P2", "FROM_GLOBAL_BOUND_CPU_P2",
+
+    /* P3 */
+    "ADDTOQUEUE_P3", "EXEC_P3", "EXEC_IDLE_P3", "FROM_GLOBAL_CPU_P3",
+    "REMOVE_QUEUE_P3", "RETURN_INVOL_P3", "RETURN_VOL_P3",
+    "CPU_RESERVE_P3", "UNQUEUE_P3", "CPU_UNRESERVE_P3",
+    "CPU_DISABLE_P3", "CPU_ENABLE_P3",
+    "ADDTOQUEUE_BOUND_P3", "FROM_GLOBAL_BOUND_CPU_P3",
+
+    /* Global */
+    "REMOVE_GLOBAL_QUEUE", "START_SMP", "QUEUE_GLOBAL"
 };
+
 
 const char *cpu_places_names[] = { "CPU", "EXECUTING", "QUEUE", "SUSPENDED", "TOEXEC" };
 
@@ -120,8 +148,8 @@ init_global_resources(void)
 {
 
 	//add global hierarchical transitions
-	hierarchical_transitions[PER_CPU_HIER_TRANSITIONS] = TRAN_QUEUE_GLOBAL;
-	hierarchical_transitions[PER_CPU_HIER_TRANSITIONS + 1] = TRAN_REMOVE_GLOBAL_QUEUE;
+	// hierarchical_transitions[PER_CPU_HIER_TRANSITIONS] = TRAN_QUEUE_GLOBAL;
+	// hierarchical_transitions[PER_CPU_HIER_TRANSITIONS + 1] = TRAN_REMOVE_GLOBAL_QUEUE;
 
 	//Transition to remove from global queue
 	resource_net->incidence_matrix[PLACE_GLOBAL_QUEUE][TRAN_REMOVE_GLOBAL_QUEUE] = -1;

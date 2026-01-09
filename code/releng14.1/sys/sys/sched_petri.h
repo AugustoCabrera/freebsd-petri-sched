@@ -27,7 +27,7 @@ extern int PER_CPU_LAST_TRANSITION;
 /* constants for handling hierarchical transitions */
 #define PER_CPU_HIER_TRANSITIONS 	6
 #define GLOBAL_HIER_TRANSITIONS 	2
-#define HIERARCHICAL_TRANSITIONS 	(PER_CPU_HIER_TRANSITIONS + GLOBAL_HIER_TRANSITIONS)
+// #define HIERARCHICAL_TRANSITIONS 	(PER_CPU_HIER_TRANSITIONS + GLOBAL_HIER_TRANSITIONS)
 
 /* Definitions of places of the CPU resource net */
 #define PLACE_CPU 		0
