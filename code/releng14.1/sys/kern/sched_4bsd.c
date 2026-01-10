@@ -1674,7 +1674,33 @@ sched_choose(void)
 	td = runq_choose_fuzz(&runq, runq_fuzz); // Selecciona un thread de la cola global
 	tdcpu = runq_choose(&runq_pcpu[cpu_n]); // Selecciona un thread de la cola de la CPU que está corriendo
 
-	if (is_cpu_disabled(cpu_n) || 
+	/*
+	 * RESERVED POLICY:
+	 * Si el CPU está reservado, NO debe consumir de la cola global.
+	 * Solo puede ejecutar hilos ya en su cola local; si no hay, corre idle.
+	 *
+	 * Nota: Esto permite que hilos NO-bound que ya estaban encolados antes del sysctl
+	 * se ejecuten, pero luego al re-encolar quedan bloqueados por sched_add().
+	 */
+	if (is_cpu_reserved(cpu_n)) {
+		// Aca adentro el hilo SIEMPRE es el del CPU
+		CTR2(KTR_RUNQ, "choosing td %p from pcpu runq %d (reserved)", tdcpu,
+		     cpu_n);
+		td = tdcpu;
+		rq = &runq_pcpu[cpu_n];
+
+		if (td){
+			resource_fire_net(td, TRANSITION(cpu_n, TRAN_UNQUEUE), "sched_choose(reserved)"); // (no FSM call)
+
+			rn_log_transition(td, TRANSITION(cpu_n, TRAN_UNQUEUE), "sched_choose(reserved)", NULL);
+		} //active thread available
+		else {
+			wakeup_if_needed(idletd);
+			resource_fire_net(idletd, TRANSITION(cpu_n, TRAN_EXEC_IDLE), "sched_choose_reserved_idle");
+			idletd->mark = thread_fire[THREAD_RUNQ];
+			return (idletd);
+		}
+	} else if (is_cpu_disabled(cpu_n) || 
 		td == NULL ||
 	    (tdcpu != NULL &&
 	     tdcpu->td_priority < td->td_priority)) {
