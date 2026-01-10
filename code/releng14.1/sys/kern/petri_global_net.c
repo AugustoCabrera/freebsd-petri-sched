@@ -339,22 +339,60 @@ resource_choose_cpu(struct thread* td)
 	proc_id = td->td_proc->p_pid;
 
 	monopolized_cpu = get_monopolized_cpu_by_proc_id(proc_id);
-	if (monopolized_cpu != -1)
-		return TRANSITION(monopolized_cpu, TRAN_ADDTOQUEUE);
-	
+	if (monopolized_cpu != -1) {
+		/*
+		 * Si el CPU monopolizado está reservado, solo permitirlo si el thread
+		 * es pinned/bound (conservador: bound==last_cpu).
+		 */
+		const bool reserved = is_cpu_reserved(monopolized_cpu);
+		const bool allowed_reserved = (td->td_pinned != 0) ||
+		    ((td->td_flags & TDF_BOUND) && (td->td_lastcpu == monopolized_cpu));
+		const int tr = reserved ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
+
+		if (!(reserved && !allowed_reserved) &&
+		    transition_is_sensitized(TRANSITION(monopolized_cpu, tr)) &&
+		    cpu_available_for_proc(proc_id, monopolized_cpu))
+			return TRANSITION(monopolized_cpu, tr);
+
+		/* Si no se puede, seguimos con la heurística normal */
+	}
+
 	last_cpu = td->td_lastcpu;
 	if (last_cpu != NOCPU && 
 		THREAD_CAN_SCHED(td, last_cpu) &&
-		transition_is_sensitized(TRANSITION(last_cpu, TRAN_ADDTOQUEUE)) &&
-		cpu_available_for_proc(proc_id, last_cpu))
-			return TRANSITION(last_cpu, TRAN_ADDTOQUEUE);
+		cpu_available_for_proc(proc_id, last_cpu)) {
 
-	//Only check for transitions of addtoqueue
-	for (int transition_index = TRAN_ADDTOQUEUE; transition_index < PER_CPU_LAST_TRANSITION; transition_index += CPU_BASE_TRANSITIONS) {
-		int cpu_number = (transition_index / CPU_BASE_TRANSITIONS);
-		if (THREAD_CAN_SCHED(td, cpu_number) &&
-			transition_is_sensitized(transition_index) &&
-			cpu_available_for_proc(proc_id, cpu_number))
+		const bool reserved = is_cpu_reserved(last_cpu);
+		const bool allowed_reserved = (td->td_pinned != 0) ||
+		    ((td->td_flags & TDF_BOUND) && (td->td_lastcpu == last_cpu));
+		const int tr = reserved ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
+
+		if (!(reserved && !allowed_reserved) &&
+		    transition_is_sensitized(TRANSITION(last_cpu, tr)))
+			return TRANSITION(last_cpu, tr);
+	}
+
+	/*
+	 * Only check for transitions of addtoqueue.
+	 * Si el CPU está RESERVED:
+	 *  - threads normales no lo eligen (evita rebote con sched_add())
+	 *  - si es pinned/bound, usamos ADDTOQUEUE_BOUND (ADDBOU)
+	 */
+	for (int base = 0; base < CPU_NUMBER; base++) {
+		const bool reserved = is_cpu_reserved(base);
+		const bool allowed_reserved = (td->td_pinned != 0) ||
+		    ((td->td_flags & TDF_BOUND) && (td->td_lastcpu == base));
+		const int tr = reserved ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
+		const int transition_index = TRANSITION(base, tr);
+
+		if (!THREAD_CAN_SCHED(td, base))
+			continue;
+
+		if (reserved && !allowed_reserved)
+			continue;
+
+		if (transition_is_sensitized(transition_index) &&
+		    cpu_available_for_proc(proc_id, base))
 			return transition_index;
 	}
 	
@@ -619,3 +657,134 @@ SYSCTL_PROC(_kern_petri, OID_AUTO, turn_on_cpu,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
     0, 0, sysctl_petri_turn_on_cpu, "I",
     "Turn on the given CPU (write CPU id)");
+
+
+
+
+
+
+
+
+
+
+bool
+toggle_reserved_cpu(int cpu, bool unreserve)
+{
+	if (cpu <= 0 || cpu >= CPU_NUMBER) {
+		log(LOG_WARNING, "CPU %d reserve state cannot be changed\n", cpu);
+		return false;
+	}
+
+	if (resource_net->mark[PLACE_SMP_READY] == 0) {
+		log(LOG_WARNING, "cannot change CPU reserve state before SMP_READY\n");
+		return false;
+	}
+
+	const int base_tr = unreserve ? TRAN_CPU_UNRESERVE : TRAN_CPU_RESERVE;
+	const int tr = TRANSITION(cpu, base_tr);
+	const char *action = unreserve ? "unreserved" : "reserved";
+
+	/*
+	 * Idempotencia (recomendado):
+	 * - si ya está reservado y piden reservar -> OK sin disparar
+	 * - si no está reservado y piden unreserve -> OK sin disparar
+	 */
+	if (!unreserve && is_cpu_reserved(cpu)) {
+		log(LOG_INFO, "CPU %d already reserved\n", cpu);
+		return true;
+	}
+	if (unreserve && !is_cpu_reserved(cpu)) {
+		log(LOG_INFO, "CPU %d already unreserved\n", cpu);
+		return true;
+	}
+
+	if (transition_is_sensitized(tr)) {
+		/* Resource-only: this does not alter the thread FSM */
+		resource_fire_net(curthread, tr, action);
+		return true;
+	}
+
+	log(LOG_WARNING, "CPU %d cannot be %s\n", cpu, action);
+	return false;
+}
+
+void
+reserve_cpu(int cpu)
+{
+	if (toggle_reserved_cpu(cpu, /*unreserve=*/false))
+		log(LOG_INFO, "CPU %d reserved by Thread %2d\n", cpu, curthread->td_tid);
+}
+
+void
+unreserve_cpu(int cpu)
+{
+	if (toggle_reserved_cpu(cpu, /*unreserve=*/true))
+		log(LOG_INFO, "CPU %d unreserved by Thread %2d\n", cpu, curthread->td_tid);
+}
+
+
+/*
+ * Handler: write a CPU id and that CPU will be RESERVED.
+ * Usage from userland:
+ *   sysctl kern.petri.reserve_cpu=<n>
+ */
+static int
+sysctl_petri_reserve_cpu(SYSCTL_HANDLER_ARGS)
+{
+    int error;
+    int cpu = -1;
+
+    /* Get the value written from userland */
+    error = sysctl_handle_int(oidp, &cpu, 0, req);
+    if (error || req->newptr == NULL)
+        return (error);     /* read-only access or error */
+
+    /* Basic validation */
+    if (cpu <= 0 || cpu >= CPU_NUMBER)
+        return (EINVAL);
+
+    /* Call the Petri-net function that reserves a CPU */
+    reserve_cpu(cpu);
+
+    return (0);
+}
+
+/* sysctl: kern.petri.reserve_cpu */
+SYSCTL_PROC(_kern_petri, OID_AUTO, reserve_cpu,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+    0, 0, sysctl_petri_reserve_cpu, "I",
+    "Reserve the given CPU (write CPU id)");
+
+/*
+ * Symmetric sysctl to UNRESERVE a specific CPU.
+ * Usage from userland:
+ *   sysctl kern.petri.unreserve_cpu=<n>
+ */
+static int
+sysctl_petri_unreserve_cpu(SYSCTL_HANDLER_ARGS)
+{
+    int error;
+    int cpu = -1;
+
+    /* Get the value written from userland */
+    error = sysctl_handle_int(oidp, &cpu, 0, req);
+    if (error || req->newptr == NULL)
+        return (error);     /* read-only access or error */
+
+    /* Basic validation */
+    if (cpu <= 0 || cpu >= CPU_NUMBER)
+        return (EINVAL);
+
+    /* Call the Petri-net function that unreserves a CPU */
+    unreserve_cpu(cpu);
+
+    return (0);
+}
+
+/* sysctl: kern.petri.unreserve_cpu */
+SYSCTL_PROC(_kern_petri, OID_AUTO, unreserve_cpu,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+    0, 0, sysctl_petri_unreserve_cpu, "I",
+    "Unreserve the given CPU (write CPU id)");
+
+	

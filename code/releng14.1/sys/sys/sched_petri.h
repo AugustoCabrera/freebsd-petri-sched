@@ -134,5 +134,8 @@ void resource_expulse_thread(struct thread *td, int flags, const char *func);
 void toggle_pin_thread_to_cpu(int thread_id, int cpu);
 void turn_off_cpu(int cpu);
 void turn_on_cpu(int cpu);
+bool toggle_reserved_cpu(int cpu, bool unreserve);
+void reserve_cpu(int cpu);
+void unreserve_cpu(int cpu);
 
 #endif
