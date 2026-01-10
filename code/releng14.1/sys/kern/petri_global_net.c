@@ -100,7 +100,8 @@ const char *transitions_names[] = {
 };
 
 
-const char *cpu_places_names[] = { "CPU", "EXECUTING", "QUEUE", "DISABLED", "TOEXEC", "RESERVED" };
+const char *cpu_places_names[] = { "CPU", "EXECUTING", "QUEUE", "RESERVED", "TOEXEC", "DISABLED" };
+
 
 static void resource_fire_single_transition(struct thread *pt, int transition_index);
 int get_monopolized_cpu_by_proc_id(int proc_id);
