@@ -100,7 +100,7 @@ const char *transitions_names[] = {
 };
 
 
-const char *cpu_places_names[] = { "CPU", "EXECUTING", "QUEUE", "SUSPENDED", "TOEXEC" };
+const char *cpu_places_names[] = { "CPU", "EXECUTING", "QUEUE", "DISABLED", "TOEXEC", "RESERVED" };
 
 static void resource_fire_single_transition(struct thread *pt, int transition_index);
 int get_monopolized_cpu_by_proc_id(int proc_id);
@@ -253,6 +253,11 @@ is_cpu_disabled(int cpu_n)
 {
 	return resource_net->mark[PLACE(cpu_n, PLACE_DISABLED)] > 0;
 }
+
+bool is_cpu_reserved(int cpu_n) {
+    return (resource_net->mark[PLACE(cpu_n, PLACE_RESERVED)] > 0);
+}
+
 
 /**
  * fire the transition passed as param to the function
