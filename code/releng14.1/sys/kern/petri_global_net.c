@@ -347,7 +347,7 @@ resource_choose_cpu(struct thread* td)
 		 */
 		const bool reserved = is_cpu_reserved(monopolized_cpu);
 		const bool allowed_reserved = (td->td_pinned != 0) ||
-		    ((td->td_flags & TDF_BOUND) && (td->td_lastcpu == monopolized_cpu));
+		    ((td->td_flags & PETRI_TDF_BOUND) && (td->td_lastcpu == monopolized_cpu));
 		const int tr = reserved ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
 
 		if (!(reserved && !allowed_reserved) &&
@@ -365,7 +365,7 @@ resource_choose_cpu(struct thread* td)
 
 		const bool reserved = is_cpu_reserved(last_cpu);
 		const bool allowed_reserved = (td->td_pinned != 0) ||
-		    ((td->td_flags & TDF_BOUND) && (td->td_lastcpu == last_cpu));
+		    ((td->td_flags & PETRI_TDF_BOUND) && (td->td_lastcpu == last_cpu));
 		const int tr = reserved ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
 
 		if (!(reserved && !allowed_reserved) &&
@@ -382,7 +382,7 @@ resource_choose_cpu(struct thread* td)
 	for (int base = 0; base < CPU_NUMBER; base++) {
 		const bool reserved = is_cpu_reserved(base);
 		const bool allowed_reserved = (td->td_pinned != 0) ||
-		    ((td->td_flags & TDF_BOUND) && (td->td_lastcpu == base));
+		    ((td->td_flags & PETRI_TDF_BOUND) && (td->td_lastcpu == base));
 		const int tr = reserved ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
 		const int transition_index = TRANSITION(base, tr);
 
