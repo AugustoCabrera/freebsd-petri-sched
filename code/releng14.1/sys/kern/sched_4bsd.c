@@ -110,6 +110,8 @@ struct td_sched {
 #define TDF_BOUND	TDF_SCHED1	/* Bound to one CPU. */
 #define	TDF_SLICEEND	TDF_SCHED2	/* Thread time slice is over. */
 
+#define TDF_USERBOUND TDF_SCHED3 /* User requested bound (eligible for reserved). */
+
 /* flags kept in ts_flags */
 #define	TSF_AFFINITY	0x0001		/* Has a non-"full" CPU set. */
 
@@ -1388,8 +1390,9 @@ sched_add(struct thread *td, int flags)
 	bool reserved = false;
 	bool allowed_reserved = false;
 
-	if (smp_started && (td->td_pinned != 0 || (td->td_flags & TDF_BOUND) ||
-	    (ts->ts_flags & TSF_AFFINITY))) {
+	if (smp_started && (td->td_pinned != 0 ||
+    (td->td_flags & (TDF_BOUND | TDF_USERBOUND)) != 0 ||
+    (ts->ts_flags & TSF_AFFINITY))) {
 
 		/* 1) pick initial candidate cpu */
 		if (td->td_pinned != 0) {
@@ -1397,7 +1400,8 @@ sched_add(struct thread *td, int flags)
 			/* If pinned, lastcpu must be valid when used. */
 			KASSERT(cpu < mp_ncpus,
 			    ("sched_add: pinned thread lastcpu out of range: %u", cpu));
-		} else if ((td->td_flags & TDF_BOUND) != 0) {
+		} else if ((td->td_flags & (TDF_BOUND | TDF_USERBOUND)) != 0) {
+
 			/*
 			 * Bound: prefer boundcpu only if we actually have one AND
 			 * the net allows enqueue there. Otherwise pick another CPU.
@@ -1431,7 +1435,8 @@ sched_add(struct thread *td, int flags)
 		 */
 		reserved = is_cpu_reserved(cpu);
 		allowed_reserved = (td->td_pinned != 0) ||
-		    (((td->td_flags & TDF_BOUND) != 0) && (boundcpu == (int)cpu));
+    (((td->td_flags & (TDF_BOUND | TDF_USERBOUND)) != 0) &&
+     (boundcpu == (int)cpu));
 		addtr = reserved ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
 
 		/*
@@ -1451,7 +1456,8 @@ sched_add(struct thread *td, int flags)
 			/* Recompute rules for altcpu */
 			reserved = is_cpu_reserved(altcpu);
 			allowed_reserved = (td->td_pinned != 0) ||
-			    (((td->td_flags & TDF_BOUND) != 0) && (boundcpu == (int)altcpu));
+		(((td->td_flags & (TDF_BOUND | TDF_USERBOUND)) != 0) &&
+		(boundcpu == (int)altcpu));
 			addtr = reserved ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
 
 			if (altcpu != cpu &&
@@ -1479,7 +1485,8 @@ sched_add(struct thread *td, int flags)
 		/* Recompute final add transition for chosen cpu (in case we changed it) */
 		reserved = is_cpu_reserved(cpu);
 		allowed_reserved = (td->td_pinned != 0) ||
-		    (((td->td_flags & TDF_BOUND) != 0) && (boundcpu == (int)cpu));
+    	(((td->td_flags & (TDF_BOUND | TDF_USERBOUND)) != 0) &&
+     	(boundcpu == (int)cpu));
 		addtr = reserved ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
 
 		/* 3) commit to per-cpu runq only after net validation */
@@ -1537,7 +1544,8 @@ queued:
 		/* Validate enqueue transition according to RESERVED state */
 		reserved = is_cpu_reserved(cpu);
 		allowed_reserved = (td->td_pinned != 0) ||
-		    (((td->td_flags & TDF_BOUND) != 0) && (boundcpu == (int)cpu));
+		(((td->td_flags & (TDF_BOUND | TDF_USERBOUND)) != 0) &&
+		(boundcpu == (int)cpu));
 		addtr = reserved ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
 
 		KASSERT(!(reserved && !allowed_reserved),
@@ -1813,12 +1821,13 @@ sched_bind(struct thread *td, int cpu)
 #endif
 }
 
+
 void
 sched_unbind(struct thread* td)
 {
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
 	KASSERT(td == curthread, ("sched_unbind: can only bind curthread"));
-	td->td_flags &= ~TDF_BOUND;
+	td->td_flags &= ~(TDF_BOUND | TDF_USERBOUND);
 }
 
 int
@@ -2057,8 +2066,9 @@ sched_affinity(struct thread *td)
 		return;
 
 	/* Pinned threads and bound threads should be left alone. */
-	if (td->td_pinned != 0 || td->td_flags & TDF_BOUND)
-		return;
+	if (td->td_pinned != 0 || (td->td_flags & (TDF_BOUND | TDF_USERBOUND)) != 0)
+    	return;
+
 
 	switch (TD_GET_STATE(td)) {
 	case TDS_RUNQ:
@@ -2091,3 +2101,73 @@ sched_affinity(struct thread *td)
 	}
 #endif
 }
+
+
+
+#ifdef SMP
+static int
+sysctl_kern_sched_userbindme(SYSCTL_HANDLER_ARGS)
+{
+	if (is_cpu_disabled(cpu))
+    return (EBUSY);   /* o EINVAL */
+
+	int cpu, error;
+
+	cpu = -1;
+	error = sysctl_handle_int(oidp, &cpu, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+
+	if (cpu < 0 || cpu >= (int)mp_ncpus)
+		return (EINVAL);
+
+	thread_lock(curthread);
+
+	/* opcional pero recomendado: respetar cpuset */
+	if (!THREAD_CAN_SCHED(curthread, cpu)) {
+		thread_unlock(curthread);
+		return (EINVAL);
+	}
+
+	curthread->td_flags |= TDF_USERBOUND;
+
+	/*
+	 * Si querés “exactamente igual que bound”, llamás sched_bind().
+	 * Eso también setea TDF_BOUND y ts_runq.
+	 */
+	sched_bind(curthread, cpu);
+
+	thread_unlock(curthread);
+	return (0);
+}
+
+static int
+sysctl_kern_sched_userunbindme(SYSCTL_HANDLER_ARGS)
+{
+	int one, error;
+
+	one = 0;
+	error = sysctl_handle_int(oidp, &one, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+
+	thread_lock(curthread);
+	curthread->td_flags &= ~TDF_USERBOUND;
+
+	/* si querés deshacer el comportamiento bound real */
+	sched_unbind(curthread);
+
+	thread_unlock(curthread);
+	return (0);
+}
+
+SYSCTL_PROC(_kern_sched, OID_AUTO, userbindme,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0,
+    sysctl_kern_sched_userbindme, "I",
+    "Mark current thread USERBOUND and bind it to CPU");
+
+SYSCTL_PROC(_kern_sched, OID_AUTO, userunbindme,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0,
+    sysctl_kern_sched_userunbindme, "I",
+    "Clear USERBOUND and unbind current thread");
+#endif
