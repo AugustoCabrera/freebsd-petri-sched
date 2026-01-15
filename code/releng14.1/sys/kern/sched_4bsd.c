@@ -1652,7 +1652,7 @@ sched_rem(struct thread *td)
 		resource_fire_net(td, TRANSITION((ts->ts_runq - runq_pcpu), TRAN_REMOVE_QUEUE), "sched_rem");
 		td->mark = thread_fire[THREAD_CAN_RUN];
 	} else
-		resource_fire_net(td, TRAN_REMOVE_GLOBAL_QUEUE, "sched_add");
+		resource_fire_net(td, TRAN_REMOVE_GLOBAL_QUEUE, "sched_rem");
 		// (no FSM call)
 #endif
 	runq_remove(ts->ts_runq, td);
@@ -2094,7 +2094,7 @@ sched_affinity(struct thread *td)
 
 		ast_sched_locked(td, TDA_SCHED);
 		if (td != curthread)
-			ipi_cpu(cpu, IPI_AST);
+			ipi_cpu(td->td_oncpu, IPI_AST);
 		break;
 	default:
 		break;
@@ -2108,9 +2108,6 @@ sched_affinity(struct thread *td)
 static int
 sysctl_kern_sched_userbindme(SYSCTL_HANDLER_ARGS)
 {
-	if (is_cpu_disabled(cpu))
-    return (EBUSY);   /* o EINVAL */
-
 	int cpu, error;
 
 	cpu = -1;
@@ -2123,23 +2120,26 @@ sysctl_kern_sched_userbindme(SYSCTL_HANDLER_ARGS)
 
 	thread_lock(curthread);
 
-	/* opcional pero recomendado: respetar cpuset */
+	/* si is_cpu_disabled() asume sched_lock, acá ya lo tenés via thread_lock */
+	/* mtx_assert(&sched_lock, MA_OWNED);  opcional para chequear */
+
+	if (is_cpu_disabled(cpu)) {
+		thread_unlock(curthread);
+		return (EBUSY); /* o EINVAL */
+	}
+
 	if (!THREAD_CAN_SCHED(curthread, cpu)) {
 		thread_unlock(curthread);
 		return (EINVAL);
 	}
 
 	curthread->td_flags |= TDF_USERBOUND;
-
-	/*
-	 * Si querés “exactamente igual que bound”, llamás sched_bind().
-	 * Eso también setea TDF_BOUND y ts_runq.
-	 */
 	sched_bind(curthread, cpu);
 
 	thread_unlock(curthread);
 	return (0);
 }
+
 
 static int
 sysctl_kern_sched_userunbindme(SYSCTL_HANDLER_ARGS)
