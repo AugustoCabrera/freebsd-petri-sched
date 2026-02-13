@@ -1,14 +1,25 @@
 // userbound_one_thread.c
-// FreeBSD: cc -O2 -pthread userbound_one_thread.c -o userbound_one_thread
+// CORRER EN FreeBSD: cc -O2 -pthread userbound_one_thread.c -o userbound_one_thread
 //
-// Requiere que exista un sysctl que "bindea al thread llamador":
-//   kern.sched.userbindme = <cpu>
+//  sysctl que "bindea al thread llamador": kern.sched.userbindme = <cpu>
 // (internamente: setea TDF_USERBOUND y llama sched_bind(curthread,cpu))
 //
 // Ejecuta 2 threads:
 //  - T1: se vuelve userbound al CPU_X y hace busy-loop (progresa siempre).
 //  - T2: NO userbound (opcional: affinity solo a CPU_X) y hace yield para forzar re-encolado.
 //  tirar tu sysctl de "reservar CPU_X" cuando quieras desde otra terminal.
+
+/*
+./userbound_one_thread 2 X
+        -> CPU_X = 2                 T1 queda bound al CPU2 (por tu sysctl kern.sched.userbindme=2).
+        -> PIN_UNBOUND_TO_CPU_X = 1
+
+        2 1: forzás que ambos threads solo puedan correr en CPU2 (uno bound, el otro solo affinity). 
+             Sirve para ver competencia directa y luego cómo tu “reserva” expulsa/bloquea al no bound.
+        2 0: solo el thread crítico (T1) queda clavado a CPU2; el otro queda libre. Sirve para ver el 
+             caso “realista” donde el sistema puede mover al no bound a otros cores.
+*/
+
 
 #define _GNU_SOURCE
 #include <pthread.h>
@@ -27,11 +38,7 @@
 #include <sys/thr.h>
 
 static int CPU_X = 3;
-
-/* Cambiá esto al nombre real que implementaste */
 static const char *SYSCTL_USERBINDME = "kern.sched.userbindme";
-
-/* Si querés que el hilo no-userbound quede "pegado" al CPU_X via affinity */
 static int PIN_UNBOUND_TO_CPU_X = 1;
 
 static volatile uint64_t c_userbound = 0;
@@ -83,7 +90,7 @@ t1_userbound(void *arg)
 {
     (void)arg;
 
-    /* Este hilo se vuelve userbound + bound real al CPU_X */
+    /*hilo se vuelve userbound + bound real al CPU_X */
     userbindme_cpuX();
 
     for (;;) {
@@ -121,7 +128,7 @@ main(int argc, char **argv)
     printf("SYSCTL_USERBINDME=%s\n", SYSCTL_USERBINDME);
     printf("PIN_UNBOUND_TO_CPU_X=%d (affinity solo a CPU_X para el hilo NO userbound)\n",
            PIN_UNBOUND_TO_CPU_X);
-    printf("\nTip: en otra terminal tirá tu sysctl para reservar CPU_X cuando quieras.\n\n");
+    printf("\n OBJ!: en otra terminal EL sysctl para reservar CPU_X\n\n");
     fflush(stdout);
 
     pthread_t a, b;
