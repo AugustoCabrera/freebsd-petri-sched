@@ -39,6 +39,12 @@
 
 static int CPU_X = 3;
 static const char *SYSCTL_USERBINDME = "kern.sched.userbindme";
+
+/*
+es un sysctl “self-service” que le permite al thread que lo ejecuta marcarse como userbound y 
+además quedar bound real a un CPU específico, de forma coherente con la política de “CPU reservadoo”.
+*/
+
 static int PIN_UNBOUND_TO_CPU_X = 1;
 
 static volatile uint64_t c_userbound = 0;
@@ -88,6 +94,9 @@ userbindme_cpuX(void)
 static void *
 t1_userbound(void *arg)
 {
+
+    // T1 (t1_userbound): se marca TDF_USERBOUND y queda bound real a CPU2 (TDF_BOUND + ts_runq = &runq_pcpu[2]).
+
     (void)arg;
 
     /*hilo se vuelve userbound + bound real al CPU_X */
@@ -97,6 +106,10 @@ t1_userbound(void *arg)
         c_userbound++;
         if ((c_userbound & ((1u<<20)-1)) == 0)
             sched_yield(); /* fuerza re-encolado y evidencia del scheduler */
+
+            /* sched_yield() es una llamada (POSIX) que le dice al scheduler: “cedo voluntariamente 
+            la CPU ahora; poneme al final y dejá correr a otro runnable”.
+            */
     }
     return NULL;
 }
@@ -104,6 +117,8 @@ t1_userbound(void *arg)
 static void *
 t2_unbound(void *arg)
 {
+    //T2 (t2_unbound): NO es bound, pero queda con afinidad solamente a CPU2 (cpuset con solo el bit 2).
+
     (void)arg;
 
     if (PIN_UNBOUND_TO_CPU_X)
