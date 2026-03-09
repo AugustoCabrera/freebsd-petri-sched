@@ -1,13 +1,14 @@
-// churn_worker_pool_simple.c
-// FreeBSD: cc -O2 -pthread churn_worker_pool_simple.c -o churn_simple
-//
-// Fases alternadas por el main:
-//  phase=0 (NO_WORK): work_items=0 -> todos hacen sched_yield() (RUNNABLE churn)
-//  phase=1 (SEQ_CONTEND): work_items>0 + trylock(lock_global) -> 1 progresa, resto yield
+// churn_worker_pool.c  (simple o modo bloqueante)
+// FreeBSD: cc -O2 -pthread churn_worker_pool.c -o churn_worker_pool
 //
 // Uso:
-//   ./churn_simple [nthreads] [seconds] [phase_ms]
-//   ej: ./churn_simple 32 15 250
+//   ./churn_worker_pool [nthreads] [seconds] [phase_ms] [--block]
+// Ej:
+//   ./churn_worker_pool 32 15 250           (activo: trylock + yield)
+//   ./churn_worker_pool 32 15 250 --block   (bloqueante: mutex_lock)
+
+// actualizar: rsync -avz --progress -e ssh benchmarks/churn_pool/churn_worker_pool.c \
+  root@192.168.1.32:/usr/local/src/benchmarks/churn_pool/
 
 #include <pthread.h>
 #include <sched.h>
@@ -15,6 +16,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -32,6 +34,9 @@ static atomic_ullong g_yields = 0;
 static atomic_ullong g_trylock_fail = 0;
 static atomic_ullong g_tasks_done = 0;
 
+// 0 = trylock + yield (activo), 1 = mutex_lock (bloqueante)
+static int g_blocking_lock = 0;
+
 static inline uint64_t now_ns(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -44,32 +49,37 @@ static void* worker(void* arg) {
   while (!atomic_load(&g_stop)) {
     int ph = atomic_load(&g_phase);
 
-    if (ph == 0) {      
+    if (ph == 0) {
       // NO_WORK: cola vacía -> churn puro: runnable + yield
       atomic_fetch_add(&g_yields, 1);
       sched_yield();
       continue;
     }
 
-    // SEQ_CONTEND: hay trabajo, pero solo progresa el que toma el lock global
+    // SEQ_CONTEND: hay trabajo, pero serializado por lock global
     long items = atomic_load(&g_work_items);
     if (items <= 0) {
-      atomic_fetch_add(&g_yields, 1);       // cuenta cuántas veces un worker hace “churn” (yield).
-      sched_yield();                        // El thread cede voluntariamente el CPU.
-      continue;     //Salta al comienzo del while: en NO_WORK el worker hace yield una y otra vez.
-    }
-
-    if (pthread_mutex_trylock(&g_global_lock) != 0) {
-        //Intenta tomar el lock global SIN bloquearse. Si no lo consigue (porque otro worker lo tiene), entra al if
-      atomic_fetch_add(&g_trylock_fail, 1);
       atomic_fetch_add(&g_yields, 1);
       sched_yield();
       continue;
     }
 
+    if (!g_blocking_lock) {
+      // Modo activo: no bloquea, genera churn por contención
+      if (pthread_mutex_trylock(&g_global_lock) != 0) {
+        atomic_fetch_add(&g_trylock_fail, 1);
+        atomic_fetch_add(&g_yields, 1);
+        sched_yield();
+        continue;
+      }
+    } else {
+      // Modo bloqueante: si el lock está tomado, el hilo se duerme esperando el mutex
+      pthread_mutex_lock(&g_global_lock);
+    }
+
     // Dentro del lock: consumir 1 item si había
     if (atomic_fetch_sub(&g_work_items, 1) > 0) {
-      // trabajo breve (mantener corto para que se note el overhead)
+      // trabajo breve
       for (volatile int i = 0; i < 200; i++) { }
       atomic_fetch_add(&g_tasks_done, 1);
     } else {
@@ -77,13 +87,31 @@ static void* worker(void* arg) {
       atomic_fetch_add(&g_work_items, 1);
     }
 
-    pthread_mutex_unlock(&g_global_lock);   //suelta mutex
+    pthread_mutex_unlock(&g_global_lock);
   }
 
   return NULL;
 }
 
+static void usage(const char* prog) {
+  printf("Uso:\n");
+  printf("  %s [nthreads] [seconds] [phase_ms] [--block]\n", prog);
+  printf("Ej:\n");
+  printf("  %s 32 15 250\n", prog);
+  printf("  %s 32 15 250 --block\n", prog);
+}
+
 int main(int argc, char** argv) {
+  // Parse flags simples (en cualquier posición)
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "--block") == 0) {
+      g_blocking_lock = 1;
+    } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+      usage(argv[0]);
+      return 0;
+    }
+  }
+
   if (argc >= 2) g_nthreads = atoi(argv[1]);
   if (argc >= 3) g_seconds  = atoi(argv[2]);
   if (argc >= 4) g_phase_ms = atoi(argv[3]);
@@ -92,8 +120,8 @@ int main(int argc, char** argv) {
   if (g_seconds  <= 0) g_seconds  = 15;
   if (g_phase_ms <= 0) g_phase_ms = 250;
 
-  printf("churn_simple: nthreads=%d seconds=%d phase_ms=%d\n",
-         g_nthreads, g_seconds, g_phase_ms);
+  printf("churn: nthreads=%d seconds=%d phase_ms=%d lock_mode=%s\n",
+         g_nthreads, g_seconds, g_phase_ms, g_blocking_lock ? "BLOCKING" : "TRYLOCK+YIELD");
   printf("run: vmstat -w 1   | top -SH   | procstat -t <pid>\n");
 
   pthread_t* ths = calloc((size_t)g_nthreads, sizeof(*ths));
