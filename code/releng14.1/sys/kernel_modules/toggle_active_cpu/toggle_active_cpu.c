@@ -98,7 +98,7 @@ timer_callback_monopolization(void *arg)
 
     //release monopolized cpus if the pid it belongs to isnt in the most prioritized
     for (int n_cpu = 1; n_cpu < CPU_NUMBER; n_cpu++) {
-        if (cpus[n_cpu] == -1 || is_cpu_suspended(n_cpu))//if not monopolized or is_susp, continue
+        if (cpus[n_cpu] == -1 || is_cpu_disabled(n_cpu))//if not monopolized or is_susp, continue
             continue; 
 
         bool keep = false;
@@ -120,7 +120,7 @@ timer_callback_monopolization(void *arg)
     if (cpus_requested > 0) {
         //for now, only one cpu can be monopolized (cpu 1). it needs to be improved.
         for (int n_cpu = 1; n_cpu < CPU_NUMBER; n_cpu++) {//skip cpu 0
-            if ((cpus[n_cpu] == -1) && !is_cpu_suspended(n_cpu) && (monopolized < MAX_TURNED_OFF)) {
+            if ((cpus[n_cpu] == -1) && !is_cpu_disabled(n_cpu) && (monopolized < MAX_TURNED_OFF)) {
                 if (monopolize_cpu(monopolization_pids[n_cpu - 1], n_cpu)) {//minus 1 because started in index 1
                     log(LOG_INFO | LOG_LOCAL2, "CPU %d monopolized by %d\n", n_cpu, monopolization_pids[n_cpu - 1]);
                     monopolized++;

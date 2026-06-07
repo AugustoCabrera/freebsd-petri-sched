@@ -401,7 +401,7 @@ struct thread {
 	void		*td_emuldata;	/* Emulator state data */
 	int		td_lastcpu;	/* (t) Last cpu we were on. */
 	int		td_oncpu;	/* (t) Which cpu we are on. */
-	int 	mark[THREADS_PLACES_SIZE];
+	const int *mark;   // puntero a fila one-hot inmutable
 	void		*td_lkpi_task;	/* LinuxKPI task struct pointer */
 	int		td_pmcpend;
 	void		*td_remotereq;	/* (c) dbg remote request. */

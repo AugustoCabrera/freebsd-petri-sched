@@ -58,6 +58,7 @@
 #include <sys/umtxvar.h>
 #include <machine/pcb.h>
 #include <machine/smp.h>
+#include <sys/sched_petri_rnlog.h> 
 
 #ifdef HWPMC_HOOKS
 #include <sys/pmckern.h>
@@ -108,6 +109,8 @@ struct td_sched {
 #define TDF_DIDRUN	TDF_SCHED0	/* thread actually ran. */
 #define TDF_BOUND	TDF_SCHED1	/* Bound to one CPU. */
 #define	TDF_SLICEEND	TDF_SCHED2	/* Thread time slice is over. */
+
+#define TDF_USERBOUND TDF_SCHED3 /* User requested bound (eligible for reserved). */
 
 /* flags kept in ts_flags */
 #define	TSF_AFFINITY	0x0001		/* Has a non-"full" CPU set. */
@@ -1069,7 +1072,7 @@ sched_switch(struct thread *td, int flags)
 	newtd = choosethread();
 	MPASS(newtd->td_lock == &sched_lock);
 	resource_fire_net(newtd, TRANSITION(PCPU_GET(cpuid), TRAN_EXEC), "sched_switch");
-
+	newtd->mark = thread_fire[THREAD_RUNNING];
 
 #if (KTR_COMPILE & KTR_SCHED) != 0
 	if (TD_IS_IDLETHREAD(td))
@@ -1303,12 +1306,23 @@ sched_pickcpu(struct thread *td)
 	mtx_assert(&sched_lock, MA_OWNED);
 
 	transition = resource_choose_cpu(td);
-	if (transition == TRAN_QUEUE_GLOBAL)
-		cpu = NOCPU;
-	else
-		cpu = (int)(transition / CPU_BASE_TRANSITIONS);
 
-	KASSERT(cpu != NOCPU, ("no valid CPUs"));
+	if (transition == TRAN_QUEUE_GLOBAL) {
+		/*
+		 * La red de Petri no eligió un CPU concreto (cola global).
+		 * En este contexto necesitamos un CPU específico, así que
+		 * usamos como fallback la CPU actual.
+		 */
+		cpu = PCPU_GET(cpuid);
+	} else {
+		cpu = (int)(transition / CPU_BASE_TRANSITIONS);
+	}
+
+	/* El cpu debe ser válido para la red de Petri. */
+	KASSERT(cpu >= 0 && cpu < CPU_NUMBER,
+	    ("sched_pickcpu: cpu=%d fuera de rango Petri (CPU_NUMBER=%d)",
+	     cpu, CPU_NUMBER));
+
 	return (cpu);
 }
 #endif
@@ -1337,7 +1351,7 @@ sched_add(struct thread *td, int flags)
 	    sched_tdname(curthread));
 	KTR_POINT1(KTR_SCHED, "thread", sched_tdname(curthread), "wokeup",
 	    KTR_ATTR_LINKED, sched_tdname(td));
-	SDT_PROBE4(sched, , , enqueue, td, td->td_proc, NULL, 
+	SDT_PROBE4(sched, , , enqueue, td, td->td_proc, NULL,
 	    flags & SRQ_PREEMPTED);
 
 	/*
@@ -1356,43 +1370,188 @@ sched_add(struct thread *td, int flags)
 	wakeup_if_needed(td);
 
 	/*
-	 * If SMP is started and the thread is pinned or otherwise limited to
-	 * a specific set of CPUs, queue the thread to a per-CPU run queue.
-	 * Otherwise, queue the thread to the global run queue.
-	 *
-	 * If SMP has not yet been started we must use the global run queue
-	 * as per-CPU state may not be initialized yet and we may crash if we
-	 * try to access the per-CPU run queues.
+	 * SAFE boundcpu: only meaningful if ts_runq is a per-cpu runq.
+	 * Early boot: ts->ts_runq can be unset/temporary -> normalize to global.
 	 */
-	int boundcpu = ts->ts_runq - &runq_pcpu[0];
-	if (smp_started && (td->td_pinned != 0 || td->td_flags & TDF_BOUND ||
-	    ts->ts_flags & TSF_AFFINITY)) {
-		if (td->td_pinned != 0) 
+	int boundcpu = -1;
+	if (SKE_RUNQ_PCPU(ts)) {
+		boundcpu = (int)(ts->ts_runq - &runq_pcpu[0]);
+		/* If it's per-cpu, it MUST be within range. */
+		KASSERT(boundcpu >= 0 && boundcpu < (int)mp_ncpus,
+		    ("sched_add: ts_runq per-cpu but out of range: %d", boundcpu));
+	} else {
+		/* Don't panic in early boot: force global if unexpected. */
+		if (ts->ts_runq != &runq)
+			ts->ts_runq = &runq;
+	}
+
+	/* Reserved support: choose ADDTOQUEUE vs ADDTOQUEUE_BOUND */
+	int addtr = TRAN_ADDTOQUEUE;
+	bool reserved = false;
+	bool allowed_reserved = false;
+
+	if (smp_started && (td->td_pinned != 0 ||
+    (td->td_flags & (TDF_BOUND | TDF_USERBOUND)) != 0 ||
+    (ts->ts_flags & TSF_AFFINITY))) {
+
+		/* 1) pick initial candidate cpu */
+		if (td->td_pinned != 0) {
 			cpu = td->td_lastcpu;
-		else if (td->td_flags & TDF_BOUND && 
-				transition_is_sensitized(TRANSITION(boundcpu, TRAN_ADDTOQUEUE))) {
-			/* Find CPU from bound runq. */
-			KASSERT(SKE_RUNQ_PCPU(ts),
-			    ("sched_add: bound td_sched not on cpu runq"));
-			cpu = boundcpu;
-		} else
+			/* If pinned, lastcpu must be valid when used. */
+			KASSERT(cpu < mp_ncpus,
+			    ("sched_add: pinned thread lastcpu out of range: %u", cpu));
+		} else if ((td->td_flags & (TDF_BOUND | TDF_USERBOUND)) != 0) {
+
+			/*
+			 * Bound: prefer boundcpu only if we actually have one AND
+			 * the net allows enqueue there. Otherwise pick another CPU.
+			 * (No panic here: early boot/transient states can exist.)
+			 */
+			if (boundcpu != -1) {
+				reserved = is_cpu_reserved(boundcpu);
+				addtr = reserved ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
+
+				if (transition_is_sensitized(TRANSITION(boundcpu, addtr))) {
+					cpu = (u_int)boundcpu;
+				} else {
+					cpu = sched_pickcpu(td);
+				}
+			} else {
+				cpu = sched_pickcpu(td);
+			}
+		} else {
 			/* Find a valid CPU for our cpuset */
 			cpu = sched_pickcpu(td);
+		}
+
+		/* Candidate cpu must always be in range before TRANSITION(). */
+		KASSERT(cpu < mp_ncpus,
+		    ("sched_add: selected cpu out of range: %u", cpu));
+
+		/*
+		 * Decide which enqueue transition we will use for this cpu:
+		 * - normal CPUs:        ADDTOQUEUE
+		 * - reserved CPUs:      ADDTOQUEUE_BOUND (only if thread is bound/pinned to that cpu)
+		 */
+		reserved = is_cpu_reserved(cpu);
+		allowed_reserved = (td->td_pinned != 0) ||
+    (((td->td_flags & (TDF_BOUND | TDF_USERBOUND)) != 0) &&
+     (boundcpu == (int)cpu));
+		addtr = reserved ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
+
+		/*
+		 * 2) HARD RULE: don't enqueue new threads on a CPU that cannot
+		 * accept enqueue (DISABLE/SUSPENDED/inhibited).
+		 * Also: if CPU is RESERVED, only allow BOUND/PINNED threads and use ADDBOU.
+		 * Pick another cpu; if none, fallback to global.
+		 */
+		if ((reserved && !allowed_reserved) ||
+		    !transition_is_sensitized(TRANSITION(cpu, addtr))) {
+			u_int altcpu;
+
+			altcpu = sched_pickcpu(td);
+			KASSERT(altcpu < mp_ncpus,
+			    ("sched_add: altcpu out of range: %u", altcpu));
+
+			/* Recompute rules for altcpu */
+			reserved = is_cpu_reserved(altcpu);
+			allowed_reserved = (td->td_pinned != 0) ||
+		(((td->td_flags & (TDF_BOUND | TDF_USERBOUND)) != 0) &&
+		(boundcpu == (int)altcpu));
+			addtr = reserved ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
+
+			if (altcpu != cpu &&
+			    !(reserved && !allowed_reserved) &&
+			    transition_is_sensitized(TRANSITION(altcpu, addtr))) {
+				cpu = altcpu;
+			} else {
+				/* No per-cpu target available -> global runq */
+				CTR2(KTR_RUNQ,
+				    "sched_add: adding td_sched:%p (td:%p) to gbl runq (fallback)",
+				    ts, td);
+				cpu = NOCPU;
+				ts->ts_runq = &runq;
+				single_cpu = 0;
+
+				/* Must be global on fallback. */
+				KASSERT(ts->ts_runq == &runq,
+				    ("sched_add: fallback expected global runq"));
+
+				resource_fire_net(td, TRAN_QUEUE_GLOBAL, "sched_add(fallback)");
+				goto queued;
+			}
+		}
+
+		/* Recompute final add transition for chosen cpu (in case we changed it) */
+		reserved = is_cpu_reserved(cpu);
+		allowed_reserved = (td->td_pinned != 0) ||
+    	(((td->td_flags & (TDF_BOUND | TDF_USERBOUND)) != 0) &&
+     	(boundcpu == (int)cpu));
+		addtr = reserved ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
+
+		/* 3) commit to per-cpu runq only after net validation */
+		KASSERT(!(reserved && !allowed_reserved),
+		    ("sched_add: committing non-bound thread to reserved cpu%u", cpu));
+		KASSERT(transition_is_sensitized(TRANSITION(cpu, addtr)),
+		    ("sched_add: committing to disabled cpu%u (enqueue tr %d not sensitized)", cpu, addtr));
 
 		ts->ts_runq = &runq_pcpu[cpu];
 		single_cpu = 1;
+
+		/* Sanity: per-cpu runq pointer must match cpu. */
+		KASSERT(ts->ts_runq == &runq_pcpu[cpu],
+		    ("sched_add: ts_runq mismatch for cpu%u", cpu));
+
 		CTR3(KTR_RUNQ,
 		    "sched_add: Put td_sched:%p(td:%p) on cpu%d runq", ts, td,
 		    cpu);
 
-		resource_fire_net(td, TRANSITION(cpu, TRAN_ADDTOQUEUE), "sched_add");
+		resource_fire_net(td, TRANSITION(cpu, addtr), "sched_add");
+		td->mark = thread_fire[THREAD_RUNQ];
+
 	} else {
 		CTR2(KTR_RUNQ,
 		    "sched_add: adding td_sched:%p (td:%p) to gbl runq", ts,
 		    td);
 		cpu = NOCPU;
 		ts->ts_runq = &runq;
+		single_cpu = 0;
+
+		KASSERT(ts->ts_runq == &runq,
+		    ("sched_add: expected global runq"));
+
 		resource_fire_net(td, TRAN_QUEUE_GLOBAL, "sched_add");
+		// (no FSM call)
+	}
+
+queued:
+	/*
+	 * Final invariants before enqueue:
+	 * - If cpu == NOCPU -> must be global runq.
+	 * - If cpu != NOCPU -> must be per-cpu runq and net must allow enqueue.
+	 */
+	if (cpu == NOCPU) {
+		KASSERT(ts->ts_runq == &runq,
+		    ("sched_add: cpu==NOCPU but ts_runq not global"));
+		KASSERT(single_cpu == 0,
+		    ("sched_add: cpu==NOCPU but single_cpu set"));
+	} else {
+		KASSERT(cpu < mp_ncpus,
+		    ("sched_add: cpu out of range at enqueue: %u", cpu));
+		KASSERT(ts->ts_runq == &runq_pcpu[cpu],
+		    ("sched_add: cpu%u but ts_runq not runq_pcpu[cpu]", cpu));
+
+		/* Validate enqueue transition according to RESERVED state */
+		reserved = is_cpu_reserved(cpu);
+		allowed_reserved = (td->td_pinned != 0) ||
+		(((td->td_flags & (TDF_BOUND | TDF_USERBOUND)) != 0) &&
+		(boundcpu == (int)cpu));
+		addtr = reserved ? TRAN_ADDTOQUEUE_BOUND : TRAN_ADDTOQUEUE;
+
+		KASSERT(!(reserved && !allowed_reserved),
+		    ("sched_add: enqueue non-bound thread on reserved cpu%u (post-check)", cpu));
+		KASSERT(transition_is_sensitized(TRANSITION(cpu, addtr)),
+		    ("sched_add: enqueue to disabled cpu%u (post-check tr=%d)", cpu, addtr));
 	}
 
 	if ((td->td_flags & TDF_NOLOAD) == 0)
@@ -1491,8 +1650,10 @@ sched_rem(struct thread *td)
 	if (ts->ts_runq != &runq) {
 		runq_length[ts->ts_runq - runq_pcpu]--;
 		resource_fire_net(td, TRANSITION((ts->ts_runq - runq_pcpu), TRAN_REMOVE_QUEUE), "sched_rem");
+		td->mark = thread_fire[THREAD_CAN_RUN];
 	} else
-		resource_fire_net(td, TRAN_REMOVE_GLOBAL_QUEUE, "sched_add");
+		resource_fire_net(td, TRAN_REMOVE_GLOBAL_QUEUE, "sched_rem");
+		// (no FSM call)
 #endif
 	runq_remove(ts->ts_runq, td);
 	TD_SET_CAN_RUN(td);
@@ -1521,7 +1682,33 @@ sched_choose(void)
 	td = runq_choose_fuzz(&runq, runq_fuzz); // Selecciona un thread de la cola global
 	tdcpu = runq_choose(&runq_pcpu[cpu_n]); // Selecciona un thread de la cola de la CPU que está corriendo
 
-	if (is_cpu_suspended(cpu_n) || 
+	/*
+	 * RESERVED POLICY:
+	 * Si el CPU está reservado, NO debe consumir de la cola global.
+	 * Solo puede ejecutar hilos ya en su cola local; si no hay, corre idle.
+	 *
+	 * Nota: Esto permite que hilos NO-bound que ya estaban encolados antes del sysctl
+	 * se ejecuten, pero luego al re-encolar quedan bloqueados por sched_add().
+	 */
+	if (is_cpu_reserved(cpu_n)) {
+		// Aca adentro el hilo SIEMPRE es el del CPU
+		CTR2(KTR_RUNQ, "choosing td %p from pcpu runq %d (reserved)", tdcpu,
+		     cpu_n);
+		td = tdcpu;
+		rq = &runq_pcpu[cpu_n];
+
+		if (td){
+			resource_fire_net(td, TRANSITION(cpu_n, TRAN_UNQUEUE), "sched_choose(reserved)"); // (no FSM call)
+
+			rn_log_transition(td, TRANSITION(cpu_n, TRAN_UNQUEUE), "sched_choose(reserved)", NULL);
+		} //active thread available
+		else {
+			wakeup_if_needed(idletd);
+			resource_fire_net(idletd, TRANSITION(cpu_n, TRAN_EXEC_IDLE), "sched_choose_reserved_idle");
+			idletd->mark = thread_fire[THREAD_RUNQ];
+			return (idletd);
+		}
+	} else if (is_cpu_disabled(cpu_n) || 
 		td == NULL ||
 	    (tdcpu != NULL &&
 	     tdcpu->td_priority < td->td_priority)) {
@@ -1536,11 +1723,16 @@ sched_choose(void)
 		td = tdcpu;
 		rq = &runq_pcpu[cpu_n];
 
-		if (td) //active thread available
-			resource_fire_net(td, TRANSITION(cpu_n, TRAN_UNQUEUE), "sched_choose");
-		else if (is_cpu_suspended(cpu_n)) { //CPU suspended -> no active thread 
+		if (td){
+			resource_fire_net(td, TRANSITION(cpu_n, TRAN_UNQUEUE), "sched_choose"); // (no FSM call)
+
+			rn_log_transition(td, TRANSITION(cpu_n, TRAN_UNQUEUE), "sched_choose", NULL);
+		} //active thread available
+		
+		else if (is_cpu_disabled(cpu_n)) { //CPU suspended -> no active thread 
 			wakeup_if_needed(idletd);
 			resource_fire_net(idletd, TRANSITION(cpu_n, TRAN_EXEC_IDLE), "sched_choose_4");
+			idletd->mark = thread_fire[THREAD_RUNQ];
 			return (idletd);
 		}
 	} else {
@@ -1550,6 +1742,8 @@ sched_choose(void)
 			// El td es el de la cola global y se continua la ejecución
 			CTR1(KTR_RUNQ, "choosing td_sched %p from main runq", td);
 			resource_fire_net(td, TRANSITION(cpu_n, TRAN_FROM_GLOBAL_CPU), "sched_choose");
+			// (no FSM call)
+			rn_log_transition(td, TRANSITION(cpu_n, TRAN_FROM_GLOBAL_CPU), "sched_choose", NULL);
 		} else //si la cpu no esta disponible para el hilo hago que se ejecute idlethread?
 			td = NULL;
 	}
@@ -1574,6 +1768,8 @@ sched_choose(void)
 
 	wakeup_if_needed(idletd);
 	resource_fire_net(idletd, TRANSITION(cpu_n, TRAN_EXEC_IDLE), "sched_choose_3");
+	idletd->mark = thread_fire[THREAD_RUNQ];
+
 	return (idletd);
 }
 
@@ -1625,12 +1821,13 @@ sched_bind(struct thread *td, int cpu)
 #endif
 }
 
+
 void
 sched_unbind(struct thread* td)
 {
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
 	KASSERT(td == curthread, ("sched_unbind: can only bind curthread"));
-	td->td_flags &= ~TDF_BOUND;
+	td->td_flags &= ~(TDF_BOUND | TDF_USERBOUND);
 }
 
 int
@@ -1748,6 +1945,7 @@ sched_throw_tail(struct thread *td)
 	KASSERT(curthread->td_md.md_spinlock_count == 1, ("invalid count"));
 	newtd = choosethread();
 	resource_fire_net(newtd, TRANSITION(PCPU_GET(cpuid), TRAN_EXEC), "sched_throw");
+	newtd->mark = thread_fire[THREAD_RUNNING];
 	cpu_throw(td, newtd);	/* doesn't return */
 }
 
@@ -1868,8 +2066,9 @@ sched_affinity(struct thread *td)
 		return;
 
 	/* Pinned threads and bound threads should be left alone. */
-	if (td->td_pinned != 0 || td->td_flags & TDF_BOUND)
-		return;
+	if (td->td_pinned != 0 || (td->td_flags & (TDF_BOUND | TDF_USERBOUND)) != 0)
+    	return;
+
 
 	switch (TD_GET_STATE(td)) {
 	case TDS_RUNQ:
@@ -1895,10 +2094,80 @@ sched_affinity(struct thread *td)
 
 		ast_sched_locked(td, TDA_SCHED);
 		if (td != curthread)
-			ipi_cpu(cpu, IPI_AST);
+			ipi_cpu(td->td_oncpu, IPI_AST);
 		break;
 	default:
 		break;
 	}
 #endif
 }
+
+
+
+#ifdef SMP
+static int
+sysctl_kern_sched_userbindme(SYSCTL_HANDLER_ARGS)
+{
+	int cpu, error;
+
+	cpu = -1;
+	error = sysctl_handle_int(oidp, &cpu, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+
+	if (cpu < 0 || cpu >= (int)mp_ncpus)
+		return (EINVAL);
+
+	thread_lock(curthread);
+
+	/* si is_cpu_disabled() asume sched_lock, acá ya lo tenés via thread_lock */
+	/* mtx_assert(&sched_lock, MA_OWNED);  opcional para chequear */
+
+	if (is_cpu_disabled(cpu)) {
+		thread_unlock(curthread);
+		return (EBUSY); /* o EINVAL */
+	}
+
+	if (!THREAD_CAN_SCHED(curthread, cpu)) {
+		thread_unlock(curthread);
+		return (EINVAL);
+	}
+
+	curthread->td_flags |= TDF_USERBOUND;
+	sched_bind(curthread, cpu);
+
+	thread_unlock(curthread);
+	return (0);
+}
+
+
+static int
+sysctl_kern_sched_userunbindme(SYSCTL_HANDLER_ARGS)
+{
+	int one, error;
+
+	one = 0;
+	error = sysctl_handle_int(oidp, &one, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+
+	thread_lock(curthread);
+	curthread->td_flags &= ~TDF_USERBOUND;
+
+	/* si querés deshacer el comportamiento bound real */
+	sched_unbind(curthread);
+
+	thread_unlock(curthread);
+	return (0);
+}
+
+SYSCTL_PROC(_kern_sched, OID_AUTO, userbindme,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0,
+    sysctl_kern_sched_userbindme, "I",
+    "Mark current thread USERBOUND and bind it to CPU");
+
+SYSCTL_PROC(_kern_sched, OID_AUTO, userunbindme,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0,
+    sysctl_kern_sched_userunbindme, "I",
+    "Clear USERBOUND and unbind current thread");
+#endif

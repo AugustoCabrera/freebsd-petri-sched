@@ -5286,6 +5286,8 @@ dev/syscon/syscon_power.c        optional syscon syscon_power
 	kern/petri_global_net.c standard
 	kern/sched_petri.c      standard
 	kern/metadata_elf_reader.c        standard
+	kern/sched_petri_rnlog.c   standard
+
 
 netinet/tcp_stacks/rack_pcm.c        optional inet tcphpts tcp_rack | inet6 tcphpts tcp_rack
 
