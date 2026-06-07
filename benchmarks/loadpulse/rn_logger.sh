@@ -1,21 +1,21 @@
 #!/bin/sh
-# rn_logger.sh — Helper para capturar CSV de resource_net en FreeBSD
+# rn_logger.sh - Helper para capturar CSV de resource_net en FreeBSD
 # Uso:
-#   sudo sh rn_logger.sh run          # hace pasos 1-3, espera Enter, hace 4-5 + reportes
-#   sudo sh rn_logger.sh setup        # solo configura filtros (paso 1)
-#   sudo sh rn_logger.sh clear        # trunca ventana (paso 2)
-#   sudo sh rn_logger.sh start        # enciende captura (paso 3)
-#   sudo sh rn_logger.sh stop         # apaga captura (paso 4)
-#   sudo sh rn_logger.sh toggle       # alterna captura ON/OFF (eco en español)
-#   sudo sh rn_logger.sh view         # muestra últimas 20 líneas (paso 5)
-#   sudo sh rn_logger.sh status       # muestra estado actual
-#   sudo sh rn_logger.sh watch        # monitorea drops en vivo (requiere SEQ)
-#   sudo sh rn_logger.sh report       # reporte offline de drops por CPU (requiere SEQ)
-#   sudo sh rn_logger.sh report-span  # CPU,FIRST,LAST,SPAN,SEEN,LOST,WRAPS (offline)
-#   sudo sh rn_logger.sh reset-seq    # intenta resetear contadores SEQ (si el sysctl existe)
+#   sudo ./rn_logger.sh run          # captura completa interactiva
+#   sudo ./rn_logger.sh setup        # configura filtros
+#   sudo ./rn_logger.sh clear        # trunca el log
+#   sudo ./rn_logger.sh start        # enciende captura
+#   sudo ./rn_logger.sh stop         # apaga captura
+#   sudo ./rn_logger.sh toggle       # alterna captura ON/OFF
+#   sudo ./rn_logger.sh view         # muestra últimas 20 líneas
+#   sudo ./rn_logger.sh status       # muestra estado actual
+#   sudo ./rn_logger.sh watch        # monitorea drops en vivo (requiere SEQ)
+#   sudo ./rn_logger.sh report       # reporte offline de drops por CPU
+#   sudo ./rn_logger.sh report-span  # reporte detallado (offline)
+#   sudo ./rn_logger.sh reset-seq    # intenta resetear contadores SEQ
 #
 # Nota: asegurar que syslog-ng escriba SOLO CSV de resource_net en:
-#       /var/log/resource_net.log   (ver guía de configuración)
+#       /var/log/resource_net.log
 #
 # Este script NO modifica syslog-ng, solo opera sysctl y el archivo destino.
 
@@ -31,35 +31,29 @@ need_root() {
 }
 
 sysctl_set() {
-  # $1 clave, $2 valor
   sysctl "$1=$2" >/dev/null
 }
 
 setup_filters() {
-  # Paso 1) Configurar filtros por defecto
-  sysctl_set kern.sched.rn.cpumask 0xFFFFFFFF     # todos los cores (32 bits)
-  sysctl_set kern.sched.rn.pid -1                 # cualquier PID
-  # session es opcional; si no está, ignorar error
+  sysctl_set kern.sched.rn.cpumask 0xFFFFFFFF
+  sysctl_set kern.sched.rn.pid -1
   sysctl kern.sched.rn.session=0 >/dev/null 2>&1 || true
-  echo "Filtros configurados: cpumask=0xFFFFFFFF pid=-1 session=0"
+  echo "[INFO] Filtros configurados: cpumask=0xFFFFFFFF pid=-1 session=0"
 }
 
 clear_window() {
-  # Paso 2) Ventana limpia
   : > "$LOGFILE"
-  echo "Ventana limpia: $LOGFILE truncado."
+  echo "[INFO] Ventana limpia: $LOGFILE truncado."
 }
 
 start_capture() {
-  # Paso 3) Encender captura
   sysctl_set kern.sched.rn.capture 1
-  echo "✅ Captura activada: logeando estados de la rdp de los recursos → $LOGFILE"
+  echo "[OK] Captura activada: logeando estados en $LOGFILE"
 }
 
 stop_capture() {
-  # Paso 4) Apagar captura
   sysctl_set kern.sched.rn.capture 0
-  echo "🛑 Captura desactivada."
+  echo "[OK] Captura desactivada."
 }
 
 toggle_capture() {
@@ -72,12 +66,11 @@ toggle_capture() {
 }
 
 view_tail() {
-  # Paso 5) Ver últimas 20 líneas
   if [ -f "$LOGFILE" ]; then
-    echo "── Últimas 20 líneas de $LOGFILE ──"
+    echo "--- Últimas 20 líneas de $LOGFILE ---"
     tail -n 20 "$LOGFILE"
   else
-    echo "No existe $LOGFILE. ¿syslog-ng está configurado para escribir CSV ahí?" >&2
+    echo "[ERR] No existe $LOGFILE. syslog-ng esta configurado para escribir ahi?" >&2
     exit 1
   fi
 }
@@ -87,8 +80,8 @@ status() {
   CPU=$(sysctl -n kern.sched.rn.cpumask 2>/dev/null || echo "?")
   PIDF=$(sysctl -n kern.sched.rn.pid 2>/dev/null || echo "?")
   SES=$(sysctl -n kern.sched.rn.session 2>/dev/null || echo "n/a")
-  echo "Estado:"
-  echo "  capture = $CAP (1=ON,0=OFF)"
+  echo "Estado actual:"
+  echo "  capture = $CAP (1=ON, 0=OFF)"
   echo "  cpumask = $CPU"
   echo "  pid     = $PIDF"
   echo "  session = $SES"
@@ -99,135 +92,129 @@ status() {
   fi
 }
 
-# ---------- RUN: flujo completo + reportes ----------
+# Flujo de pruebas
 run_flow() {
   setup_filters
   clear_window
   start_capture
-  echo "▶️  Ejecutá tu workload/benchmark ahora."
-  echo "   Cuando quieras detener la captura y ver el log, presioná ENTER..."
+  echo "[*] Ejecuta tu workload/benchmark ahora."
+  echo "    Cuando quieras detener la captura y ver el log, presioná ENTER..."
   # shellcheck disable=SC2034
   read _ || true
   stop_capture
   view_tail
-  echo "────────────────────────────────────────"
+  echo "----------------------------------------"
   report_drops
-  echo "────────────────────────────────────────"
+  echo "----------------------------------------"
   report_span
 }
 
-# ---------- Heurística de índice SEQ (por si cambia el formato) ----------
-_seq_field_awk='
-function get_seq_idx(nf, f6, f7) {
-  # Si hay >=6 campos y el 6º es numérico, usamos $6 como SEQ.
-  # Si hay >=7 y $6 no es numérico pero $7 sí, usamos $7 (raro).
-  if (nf >= 6 && f6 ~ /^[0-9]+$/) return 6;
-  if (nf >= 7 && f7 ~ /^[0-9]+$/) return 7;
-  return -1;
-}
-'
-
-# ---------- WATCH: drops en vivo ----------
+# Monitoreo en vivo
 watch_drops() {
   if [ ! -f "$LOGFILE" ]; then
-    echo "No existe $LOGFILE. Corré captura primero." >&2
+    echo "[ERR] No existe $LOGFILE. Corré captura primero." >&2
     exit 1
   fi
-  echo "👀 Dropwatch en vivo (Ctrl-C para salir). Archivo: $LOGFILE"
+  echo "[INFO] Dropwatch en vivo (Ctrl-C para salir). Archivo: $LOGFILE"
   echo "Tip: en otra terminal, corré tu benchmark."
 
   set +e
-  LC_ALL=C \
-  tail -F "$LOGFILE" 2>/dev/null | awk -F': ' "
-$_seq_field_awk
-BEGIN {
-  OFS=\",\"; printf(\"CPU LOST WRAPS\\n\") > \"/dev/stderr\";
-}
-{
-  # tomar solo la cola CSV tras ': '
-  csv=\$NF;
-  n=split(csv,a,\",\");
-  if(n<6||n>7) next;
-
-  c=a[1]+0; s=a[6]+0;
-  if (s!~/^[0-9]+$/ && n>=7 && a[7]~/^[0-9]+$/) s=a[7]+0;
-
-  if (c in last) {
-    if (s>last[c]+1) { lost[c]+=s-last[c]-1; changed=1 }
-    else if (s<last[c]) { wraps[c]++; changed=1 }
+  LC_ALL=C tail -F "$LOGFILE" 2>/dev/null | awk -F': ' '
+  BEGIN {
+    OFS=","; 
+    printf("CPU LOST WRAPS\n") > "/dev/stderr";
   }
-  last[c]=s;
+  {
+    csv=$NF;
+    n=split(csv,a,",");
+    if(n<6 || n>7) next;
 
-  if (NR%500==0 || changed) {
-    line=\"\\r\";
-    for (c in last) { line=sprintf(\"%sCPU%u lost=%u wraps=%u  \", line, c, lost[c]+0, wraps[c]+0) }
-    printf(\"%s\", line) > \"/dev/stderr\"; fflush(\"/dev/stderr\");
-    changed=0
+    c=a[1]+0; s=a[6]+0;
+    # Heurística por si SEQ cae en el campo 7
+    if (s !~ /^[0-9]+$/ && n>=7 && a[7] ~ /^[0-9]+$/) s=a[7]+0;
+
+    if (c in last) {
+      if (s>last[c]+1) { lost[c]+=s-last[c]-1; changed=1 }
+      else if (s<last[c]) { wraps[c]++; changed=1 }
+    }
+    last[c]=s;
+
+    if (NR%500==0 || changed) {
+      line="\r";
+      for (c in last) { line=sprintf("%sCPU%u lost=%u wraps=%u  ", line, c, lost[c]+0, wraps[c]+0) }
+      printf("%s", line) > "/dev/stderr"; 
+      fflush("/dev/stderr");
+      changed=0
+    }
   }
-}
-END {
-  printf(\"\\n\\nResumen final (vivo):\\n\") > \"/dev/stderr\";
-  printf(\"CPU,LOST,WRAPS\\n\") > \"/dev/stderr\";
-  for (c in last) printf(\"%u,%u,%u\\n\", c, lost[c]+0, wraps[c]+0) > \"/dev/stderr\";
-}
-"
+  END {
+    printf("\n\nResumen final (vivo):\n") > "/dev/stderr";
+    printf("CPU,LOST,WRAPS\n") > "/dev/stderr";
+    for (c in last) printf("%u,%u,%u\n", c, lost[c]+0, wraps[c]+0) > "/dev/stderr";
+  }
+  '
   rc=$?
   set -e
   exit $rc
 }
 
-# ---------- REPORT: drops offline ----------
+# Reportes offline
 report_drops() {
   if [ ! -f "$LOGFILE" ]; then
-    echo "No existe $LOGFILE. Corré captura primero." >&2
+    echo "[ERR] No existe $LOGFILE. Corre captura primero." >&2
     exit 1
   fi
-  echo "📄 Reporte de drops (offline) sobre $LOGFILE"
-  LC_ALL=C awk -F': ' "
-$_seq_field_awk
-BEGIN { OFS=\",\"; }
-{
-  csv=\$NF;
-  n=split(csv,a,\",\");
-  if(n<6||n>7) { noseq=1; next; }
+  echo "[INFO] Reporte de drops offline sobre $LOGFILE"
+  
+  LC_ALL=C awk -F': ' '
+  BEGIN { OFS=","; }
+  {
+    csv=$NF;
+    n=split(csv,a,",");
+    if(n<6 || n>7) { noseq=1; next; }
 
-  c=a[1]+0; s=a[6]+0;
-  if (!(s ~ /^[0-9]+$/) && n>=7 && a[7] ~ /^[0-9]+$/) s=a[7]+0;
+    c=a[1]+0; s=a[6]+0;
+    if (!(s ~ /^[0-9]+$/) && n>=7 && a[7] ~ /^[0-9]+$/) s=a[7]+0;
 
-  if (c in last) {
-    if (s>last[c]+1) lost[c]+=s-last[c]-1;
-    else if (s<last[c]) wraps[c]++;
+    if (c in last) {
+      if (s>last[c]+1) lost[c]+=s-last[c]-1;
+      else if (s<last[c]) wraps[c]++;
+    }
+    last[c]=s
   }
-  last[c]=s
-}
-END {
-  if (noseq) {
-    print \"WARN: No se detectó columna SEQ en alguna línea. ¿Compilaste con RNLOG_WITH_SEQ=1?\" > \"/dev/stderr\";
+  END {
+    if (noseq) {
+      print "WARN: No se detecto colum SEQ en alguna linea.Compilaste con RNLOG_WITH_SEQ=1?" > "/dev/stderr";
+    }
+    print "CPU,LOST,WRAPS";
+    total_lost=0; total_wraps=0;
+    for (c in last) {
+      print c, lost[c]+0, wraps[c]+0;
+      total_lost+=lost[c]+0; total_wraps+=wraps[c]+0;
+    }
+    print "TOTAL", total_lost, total_wraps;
   }
-  print \"CPU,LOST,WRAPS\";
-  total_lost=0; total_wraps=0;
-  for (c in last) {
-    print c, lost[c]+0, wraps[c]+0;
-    total_lost+=lost[c]+0; total_wraps+=wraps[c]+0;
-  }
-  print \"TOTAL\", total_lost, total_wraps;
-}
-" "$LOGFILE"
+  ' "$LOGFILE"
 }
 
-# ---------- REPORT-SPAN: span/seen/lost ----------
 report_span() {
   if [ ! -f "$LOGFILE" ]; then
-    echo "No existe $LOGFILE. Corré captura primero." >&2
+    echo "[ERR] No existe $LOGFILE. Corré captura primero." >&2
     exit 1
   fi
-  echo "📊 Resumen SPAN/SEEN/LOST por CPU sobre $LOGFILE"
+  echo "[INFO] Resumen SPAN/SEEN/LOST por CPU"
+  
   awk -F': ' '
   {
-    n=split($NF,a,","); if(n<6||n>7) next;
+    n=split($NF,a,","); 
+    if(n<6 || n>7) next;
+    
     c=a[1]+0; s=a[6]+0;
+    if (!(s ~ /^[0-9]+$/) && n>=7 && a[7] ~ /^[0-9]+$/) s=a[7]+0;
+
     if(!(c in first)) first[c]=s;
     last[c]=s; seen[c]++;
+    
     if(c in prev){
       if(s>prev[c]+1) gap[c]+=s-prev[c]-1;
       else if(s<prev[c]) wrap[c]++;
@@ -243,13 +230,12 @@ report_span() {
   }' "$LOGFILE" | sort -t, -k1,1n
 }
 
-# ---------- RESET-SEQ: opcional ----------
 reset_seq() {
   if sysctl -aN 2>/dev/null | grep -qx 'kern.sched.rn.reset_seq'; then
     sysctl kern.sched.rn.reset_seq=1 >/dev/null
-    echo "🔁 SEQ per-CPU reseteado (kern.sched.rn.reset_seq=1)."
+    echo "[OK] SEQ per-CPU reseteado (kern.sched.rn.reset_seq=1)."
   else
-    echo "No existe kern.sched.rn.reset_seq en este kernel (opcional)."
+    echo "[INFO] No existe kern.sched.rn.reset_seq en este kernel."
   fi
 }
 
