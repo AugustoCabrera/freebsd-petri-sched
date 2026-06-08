@@ -3,6 +3,13 @@
 
 # Proyecto Integrador: Proyecto Scheduler
 
+<p align="center">
+  <img src="https://img.shields.io/badge/Language-C-00599C?style=flat-square&logo=c" alt="C" />
+  <img src="https://img.shields.io/badge/Language-Assembly-6E4C13?style=flat-square&logo=assembly" alt="Assembly" />
+  <img src="https://img.shields.io/badge/OS-FreeBSD_14.1-AB2B28?style=flat-square&logo=freebsd" alt="FreeBSD" />
+  <img src="https://img.shields.io/badge/Model-Redes_de_Petri-6A0DAD?style=flat-square" alt="Redes de Petri" />
+</p>
+
 Este repositorio contiene el Proyecto Integrador desarrollado para obtener el título de **Ingeniero en Computación** en la **FCEFyN** (Facultad de Ciencias Exactas, Físicas y Naturales) de la **Universidad Nacional de Córdoba**. 
 
 El trabajo se enfoca en la integración final de la extensión y validación de mecanismos de control del despacho de CPU en el scheduler de corto plazo de FreeBSD, utilizando **Redes de Petri** como modelo formal. 
@@ -31,9 +38,16 @@ El desarrollo de los objetivos específicos se llevó a cabo mediante iteracione
 * `feature/core-reserved`
 * `feature/fsm-thread-net`
 
+##  Informe Final
+
+El documento completo con el marco teórico, el desarrollo de la implementación y las validaciones de este Proyecto Integrador se encuentra disponible para su lectura y descarga:
+
+**[Descargar Informe del Proyecto Integrador (PDF)](https://github.com/AugustoCabrera/freebsd-petri-sched/releases/download/v1.0.0-rc.1/proyecto_integrador_Augusto_Cabrera.pdf)**
+
+
 ## Resumen de Cambios e Implementación
 
-Actualmente, la rama `main` contiene el proyecto integrador finalizado. Dado que la rama principal partió del código base correspondiente al proyecto integrador anterior del Proyecto Scheduler.
+Actualmente, la rama `main` contiene el proyecto integrador finalizado. La rama principal partió del código base correspondiente al proyecto integrador anterior del Proyecto Scheduler.
 
 **[Ver Pull Request #17 (Detalle exacto de contribuciones y código modificado)](https://github.com/AugustoCabrera/freebsd-petri-sched/pull/17)**
 
