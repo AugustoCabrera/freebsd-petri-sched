@@ -1,4 +1,4 @@
-<img width="1728" height="385" alt="image" src="https://github.com/user-attachments/assets/cdc1ac66-de21-4214-b373-2e03e90a45e4" />
+<img width="7149" height="1968" alt="1_1_Isologotipo FCEFyN- original_Sin fondo-Con bajada" src="https://github.com/user-attachments/assets/22a1144b-c3a3-4b62-8787-68c64a659f09" />
 
 
 # Proyecto Integrador: Proyecto Scheduler
